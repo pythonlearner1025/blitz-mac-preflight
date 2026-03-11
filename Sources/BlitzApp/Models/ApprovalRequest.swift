@@ -10,7 +10,6 @@ struct ApprovalRequest: Identifiable {
     enum ToolCategory: String {
         case navigation, query
         case projectMutation
-        case databaseMutation
         case settingsMutation
         case simulatorControl
         case recording
@@ -18,14 +17,16 @@ struct ApprovalRequest: Identifiable {
         case ascScreenshotMutation
         case ascSubmitMutation
         case buildPipeline
+        case unknown
     }
 
-    var requiresApproval: Bool {
+    /// Check whether this request requires user approval.
+    /// Pass the permission toggles from SettingsService to avoid coupling to the singleton.
+    func requiresApproval(permissionToggles: [String: Bool]) -> Bool {
         switch category {
         case .navigation, .query: return false
         default:
-            // Check per-category permission toggles
-            return SettingsService.shared.permissionToggles[category.rawValue] ?? true
+            return permissionToggles[category.rawValue] ?? true
         }
     }
 }

@@ -149,6 +149,75 @@ final class AppStoreConnectService {
         }
     }
 
+    // MARK: - Versioned-Path HTTP Helpers (for /v2, /v3 endpoints)
+
+    private func makeRequest(fullPath: String, queryItems: [URLQueryItem] = []) throws -> URLRequest {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = baseHost
+        components.path = fullPath
+        if !queryItems.isEmpty {
+            components.queryItems = queryItems
+        }
+        guard let url = components.url else { throw ASCError.invalidURL }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 30
+        request.setValue("Bearer \(try validToken())", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return request
+    }
+
+    private func get<T: Decodable>(fullPath: String, queryItems: [URLQueryItem] = [], as type: T.Type) async throws -> T {
+        let request = try makeRequest(fullPath: fullPath, queryItems: queryItems)
+        let (data, response) = try await session.data(for: request)
+
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw ASCError.httpError(http.statusCode, body)
+        }
+
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    private func post(fullPath: String, body: [String: Any]) async throws -> Data {
+        var request = try makeRequest(fullPath: fullPath)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw ASCError.httpError(http.statusCode, body)
+        }
+        return data
+    }
+
+    private func patch(fullPath: String, body: [String: Any]) async throws {
+        var request = try makeRequest(fullPath: fullPath)
+        request.httpMethod = "PATCH"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw ASCError.httpError(http.statusCode, body)
+        }
+    }
+
+    private func delete(fullPath: String) async throws {
+        var request = try makeRequest(fullPath: fullPath)
+        request.httpMethod = "DELETE"
+
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw ASCError.httpError(http.statusCode, body)
+        }
+    }
+
     private func upload(url: URL, method: String, headers: [String: String], body: Data) async throws {
         var request = URLRequest(url: url)
         request.httpMethod = method
@@ -464,6 +533,559 @@ final class AppStoreConnectService {
         _ = try await post(path: "appPriceSchedules", body: body)
     }
 
+    // MARK: - Write: Paid Pricing
+
+    func fetchAppPricePoints(appId: String, territory: String = "USA") async throws -> [ASCPricePoint] {
+        let resp = try await get("apps/\(appId)/appPricePoints", queryItems: [
+            URLQueryItem(name: "filter[territory]", value: territory),
+            URLQueryItem(name: "limit", value: "200")
+        ], as: ASCListResponse<ASCPricePoint>.self)
+        return resp.data
+    }
+
+    func setAppPrice(appId: String, pricePointId: String) async throws {
+        let body: [String: Any] = [
+            "data": [
+                "type": "appPriceSchedules",
+                "relationships": [
+                    "app": ["data": ["type": "apps", "id": appId]],
+                    "baseTerritory": ["data": ["type": "territories", "id": "USA"]],
+                    "manualPrices": ["data": [["type": "appPrices", "id": "${price0}"]]]
+                ]
+            ] as [String: Any],
+            "included": [
+                [
+                    "type": "appPrices",
+                    "id": "${price0}",
+                    "relationships": [
+                        "appPricePoint": ["data": ["type": "appPricePoints", "id": pricePointId]]
+                    ]
+                ] as [String: Any]
+            ]
+        ]
+        _ = try await post(path: "appPriceSchedules", body: body)
+    }
+
+    // MARK: - In-App Purchases
+
+    func createInAppPurchase(appId: String, name: String, productId: String, inAppPurchaseType: String, reviewNote: String? = nil) async throws -> ASCInAppPurchase {
+        var attrs: [String: Any] = [
+            "name": name,
+            "productId": productId,
+            "inAppPurchaseType": inAppPurchaseType
+        ]
+        if let reviewNote { attrs["reviewNote"] = reviewNote }
+
+        let body: [String: Any] = [
+            "data": [
+                "type": "inAppPurchases",
+                "attributes": attrs,
+                "relationships": [
+                    "app": ["data": ["type": "apps", "id": appId]]
+                ]
+            ] as [String: Any]
+        ]
+        let data = try await post(fullPath: "/v2/inAppPurchases", body: body)
+        return try JSONDecoder().decode(ASCSingleResponse<ASCInAppPurchase>.self, from: data).data
+    }
+
+    func localizeInAppPurchase(iapId: String, locale: String, name: String, description: String?) async throws {
+        var attrs: [String: Any] = [
+            "name": name,
+            "locale": locale
+        ]
+        if let description { attrs["description"] = description }
+
+        let body: [String: Any] = [
+            "data": [
+                "type": "inAppPurchaseLocalizations",
+                "attributes": attrs,
+                "relationships": [
+                    "inAppPurchaseV2": ["data": ["type": "inAppPurchases", "id": iapId]]
+                ]
+            ] as [String: Any]
+        ]
+        _ = try await post(path: "inAppPurchaseLocalizations", body: body)
+    }
+
+    func fetchInAppPurchasePricePoints(iapId: String, territory: String = "USA") async throws -> [ASCPricePoint] {
+        let resp = try await get(fullPath: "/v2/inAppPurchases/\(iapId)/pricePoints", queryItems: [
+            URLQueryItem(name: "filter[territory]", value: territory),
+            URLQueryItem(name: "limit", value: "200")
+        ], as: ASCListResponse<ASCPricePoint>.self)
+        return resp.data
+    }
+
+    func setInAppPurchasePrice(iapId: String, pricePointId: String) async throws {
+        let body: [String: Any] = [
+            "data": [
+                "type": "inAppPurchasePriceSchedules",
+                "relationships": [
+                    "inAppPurchase": ["data": ["type": "inAppPurchases", "id": iapId]],
+                    "baseTerritory": ["data": ["type": "territories", "id": "USA"]],
+                    "manualPrices": ["data": [["type": "inAppPurchasePrices", "id": "${price0}"]]]
+                ]
+            ] as [String: Any],
+            "included": [
+                [
+                    "type": "inAppPurchasePrices",
+                    "id": "${price0}",
+                    "relationships": [
+                        "inAppPurchasePricePoint": ["data": ["type": "inAppPurchasePricePoints", "id": pricePointId]]
+                    ]
+                ] as [String: Any]
+            ]
+        ]
+        _ = try await post(path: "inAppPurchasePriceSchedules", body: body)
+    }
+
+    func fetchInAppPurchases(appId: String) async throws -> [ASCInAppPurchase] {
+        let resp = try await get("apps/\(appId)/inAppPurchasesV2", queryItems: [
+            URLQueryItem(name: "limit", value: "200")
+        ], as: ASCListResponse<ASCInAppPurchase>.self)
+        return resp.data
+    }
+
+    // MARK: - Territories & Availability
+
+    func fetchAllTerritories() async throws -> [String] {
+        var allIds: [String] = []
+        var path = "territories"
+        var queryItems = [URLQueryItem(name: "limit", value: "200")]
+
+        while true {
+            let resp = try await get(path, queryItems: queryItems, as: ASCPaginatedResponse<ASCTerritory>.self)
+            allIds.append(contentsOf: resp.data.map(\.id))
+            guard let next = resp.links?.next,
+                  let comps = URLComponents(string: next),
+                  let nextPath = comps.path.split(separator: "/v1/").last else { break }
+            path = String(nextPath)
+            queryItems = comps.queryItems ?? []
+        }
+        return allIds
+    }
+
+    func createIAPAvailability(iapId: String, territoryIds: [String]) async throws {
+        let territoryData = territoryIds.map { ["type": "territories", "id": $0] }
+        let body: [String: Any] = [
+            "data": [
+                "type": "inAppPurchaseAvailabilities",
+                "attributes": ["availableInNewTerritories": true],
+                "relationships": [
+                    "inAppPurchase": ["data": ["type": "inAppPurchases", "id": iapId]],
+                    "availableTerritories": ["data": territoryData]
+                ]
+            ] as [String: Any]
+        ]
+        _ = try await post(path: "inAppPurchaseAvailabilities", body: body)
+    }
+
+    func createSubscriptionAvailability(subscriptionId: String, territoryIds: [String]) async throws {
+        let territoryData = territoryIds.map { ["type": "territories", "id": $0] }
+        let body: [String: Any] = [
+            "data": [
+                "type": "subscriptionAvailabilities",
+                "attributes": ["availableInNewTerritories": true],
+                "relationships": [
+                    "subscription": ["data": ["type": "subscriptions", "id": subscriptionId]],
+                    "availableTerritories": ["data": territoryData]
+                ]
+            ] as [String: Any]
+        ]
+        _ = try await post(path: "subscriptionAvailabilities", body: body)
+    }
+
+    // MARK: - Review Submissions
+
+    func submitIAPForReview(iapId: String) async throws {
+        let body: [String: Any] = [
+            "data": [
+                "type": "inAppPurchaseSubmissions",
+                "relationships": [
+                    "inAppPurchaseV2": ["data": ["type": "inAppPurchases", "id": iapId]]
+                ]
+            ] as [String: Any]
+        ]
+        _ = try await post(path: "inAppPurchaseSubmissions", body: body)
+    }
+
+    func submitSubscriptionForReview(subscriptionId: String) async throws {
+        let body: [String: Any] = [
+            "data": [
+                "type": "subscriptionSubmissions",
+                "relationships": [
+                    "subscription": ["data": ["type": "subscriptions", "id": subscriptionId]]
+                ]
+            ] as [String: Any]
+        ]
+        _ = try await post(path: "subscriptionSubmissions", body: body)
+    }
+
+    // MARK: - Subscriptions
+
+    func createSubscriptionGroup(appId: String, referenceName: String) async throws -> ASCSubscriptionGroup {
+        let body: [String: Any] = [
+            "data": [
+                "type": "subscriptionGroups",
+                "attributes": ["referenceName": referenceName],
+                "relationships": [
+                    "app": ["data": ["type": "apps", "id": appId]]
+                ]
+            ] as [String: Any]
+        ]
+        let data = try await post(path: "subscriptionGroups", body: body)
+        return try JSONDecoder().decode(ASCSingleResponse<ASCSubscriptionGroup>.self, from: data).data
+    }
+
+    func localizeSubscriptionGroup(groupId: String, locale: String, name: String) async throws {
+        let body: [String: Any] = [
+            "data": [
+                "type": "subscriptionGroupLocalizations",
+                "attributes": ["name": name, "locale": locale],
+                "relationships": [
+                    "subscriptionGroup": ["data": ["type": "subscriptionGroups", "id": groupId]]
+                ]
+            ] as [String: Any]
+        ]
+        _ = try await post(path: "subscriptionGroupLocalizations", body: body)
+    }
+
+    func createSubscription(groupId: String, name: String, productId: String, subscriptionPeriod: String) async throws -> ASCSubscription {
+        let body: [String: Any] = [
+            "data": [
+                "type": "subscriptions",
+                "attributes": [
+                    "name": name,
+                    "productId": productId,
+                    "subscriptionPeriod": subscriptionPeriod
+                ],
+                "relationships": [
+                    "group": ["data": ["type": "subscriptionGroups", "id": groupId]]
+                ]
+            ] as [String: Any]
+        ]
+        let data = try await post(path: "subscriptions", body: body)
+        return try JSONDecoder().decode(ASCSingleResponse<ASCSubscription>.self, from: data).data
+    }
+
+    func localizeSubscription(subscriptionId: String, locale: String, name: String, description: String?) async throws {
+        var attrs: [String: Any] = [
+            "name": name,
+            "locale": locale
+        ]
+        if let description { attrs["description"] = description }
+
+        let body: [String: Any] = [
+            "data": [
+                "type": "subscriptionLocalizations",
+                "attributes": attrs,
+                "relationships": [
+                    "subscription": ["data": ["type": "subscriptions", "id": subscriptionId]]
+                ]
+            ] as [String: Any]
+        ]
+        _ = try await post(path: "subscriptionLocalizations", body: body)
+    }
+
+    func fetchSubscriptionPricePoints(subscriptionId: String, territory: String = "USA") async throws -> [ASCPricePoint] {
+        let resp = try await get("subscriptions/\(subscriptionId)/pricePoints", queryItems: [
+            URLQueryItem(name: "filter[territory]", value: territory),
+            URLQueryItem(name: "limit", value: "200")
+        ], as: ASCListResponse<ASCPricePoint>.self)
+        return resp.data
+    }
+
+    func setSubscriptionPrice(subscriptionId: String, pricePointId: String, onProgress: (@Sendable (Int, Int) -> Void)? = nil) async throws {
+        // Set base territory (USA) price
+        try await postSubscriptionPrice(subscriptionId: subscriptionId, pricePointId: pricePointId)
+
+        // Fetch Apple's auto-equalized prices for all other territories
+        let equalizations = try await fetchSubscriptionPriceEqualizations(pricePointId: pricePointId)
+        let total = equalizations.count
+
+        // Create a price entry for each territory with rate-limit handling
+        for (index, eq) in equalizations.enumerated() {
+            // Throttle: pause briefly every 40 requests to avoid 429/500
+            if index > 0 && index % 40 == 0 {
+                try await Task.sleep(for: .seconds(2))
+            }
+            try await postSubscriptionPriceWithRetry(subscriptionId: subscriptionId, pricePointId: eq.id)
+            onProgress?(index + 1, total)
+        }
+    }
+
+    private func postSubscriptionPriceWithRetry(subscriptionId: String, pricePointId: String, maxRetries: Int = 3) async throws {
+        for attempt in 0..<maxRetries {
+            do {
+                try await postSubscriptionPrice(subscriptionId: subscriptionId, pricePointId: pricePointId)
+                return
+            } catch let error as ASCError {
+                if case .httpError(let code, _) = error, (code == 429 || code >= 500) && attempt < maxRetries - 1 {
+                    let delay = Double(attempt + 1) * 3.0
+                    try await Task.sleep(for: .seconds(delay))
+                    continue
+                }
+                throw error
+            }
+        }
+    }
+
+    private func postSubscriptionPrice(subscriptionId: String, pricePointId: String) async throws {
+        let body: [String: Any] = [
+            "data": [
+                "type": "subscriptionPrices",
+                "attributes": ["preserveCurrentPrice": false, "startDate": NSNull()],
+                "relationships": [
+                    "subscription": ["data": ["type": "subscriptions", "id": subscriptionId]],
+                    "subscriptionPricePoint": ["data": ["type": "subscriptionPricePoints", "id": pricePointId]]
+                ]
+            ] as [String: Any]
+        ]
+        _ = try await post(path: "subscriptionPrices", body: body)
+    }
+
+    private func fetchSubscriptionPriceEqualizations(pricePointId: String) async throws -> [ASCPricePoint] {
+        var all: [ASCPricePoint] = []
+        var path = "subscriptionPricePoints/\(pricePointId)/equalizations"
+        var queryItems = [URLQueryItem(name: "limit", value: "200")]
+
+        while true {
+            let resp = try await get(path, queryItems: queryItems, as: ASCPaginatedResponse<ASCPricePoint>.self)
+            all.append(contentsOf: resp.data)
+            guard let next = resp.links?.next,
+                  let comps = URLComponents(string: next),
+                  let nextPath = comps.path.split(separator: "/v1/").last else { break }
+            path = String(nextPath)
+            queryItems = comps.queryItems ?? []
+        }
+        return all
+    }
+
+    func fetchSubscriptionGroups(appId: String) async throws -> [ASCSubscriptionGroup] {
+        let resp = try await get("apps/\(appId)/subscriptionGroups", queryItems: [
+            URLQueryItem(name: "limit", value: "200")
+        ], as: ASCListResponse<ASCSubscriptionGroup>.self)
+        return resp.data
+    }
+
+    func fetchSubscriptionsInGroup(groupId: String) async throws -> [ASCSubscription] {
+        let resp = try await get("subscriptionGroups/\(groupId)/subscriptions", queryItems: [
+            URLQueryItem(name: "limit", value: "200")
+        ], as: ASCListResponse<ASCSubscription>.self)
+        return resp.data
+    }
+
+    func deleteInAppPurchase(iapId: String) async throws {
+        try await delete(fullPath: "/v2/inAppPurchases/\(iapId)")
+    }
+
+    func deleteSubscription(subscriptionId: String) async throws {
+        try await delete(path: "subscriptions/\(subscriptionId)")
+    }
+
+    func deleteSubscriptionGroup(groupId: String) async throws {
+        try await delete(path: "subscriptionGroups/\(groupId)")
+    }
+
+    // MARK: - Scheduled Pricing
+
+    /// Create a scheduled price change: current price until effectiveDate, then new price.
+    func setScheduledAppPrice(appId: String, currentPricePointId: String, futurePricePointId: String, effectiveDate: String) async throws {
+        let body: [String: Any] = [
+            "data": [
+                "type": "appPriceSchedules",
+                "relationships": [
+                    "app": ["data": ["type": "apps", "id": appId]],
+                    "baseTerritory": ["data": ["type": "territories", "id": "USA"]],
+                    "manualPrices": ["data": [
+                        ["type": "appPrices", "id": "${base}"],
+                        ["type": "appPrices", "id": "${future}"]
+                    ]]
+                ]
+            ] as [String: Any],
+            "included": [
+                [
+                    "type": "appPrices",
+                    "id": "${base}",
+                    "attributes": ["endDate": effectiveDate],
+                    "relationships": [
+                        "appPricePoint": ["data": ["type": "appPricePoints", "id": currentPricePointId]]
+                    ]
+                ] as [String: Any],
+                [
+                    "type": "appPrices",
+                    "id": "${future}",
+                    "attributes": ["startDate": effectiveDate],
+                    "relationships": [
+                        "appPricePoint": ["data": ["type": "appPricePoints", "id": futurePricePointId]]
+                    ]
+                ] as [String: Any]
+            ]
+        ]
+        _ = try await post(path: "appPriceSchedules", body: body)
+    }
+
+    // MARK: - IAP Editing
+
+    func patchInAppPurchase(iapId: String, attrs: [String: Any]) async throws {
+        let body: [String: Any] = [
+            "data": [
+                "type": "inAppPurchases",
+                "id": iapId,
+                "attributes": attrs
+            ]
+        ]
+        try await patch(fullPath: "/v2/inAppPurchases/\(iapId)", body: body)
+    }
+
+    func fetchIAPLocalizations(iapId: String) async throws -> [ASCIAPLocalization] {
+        let resp = try await get(fullPath: "/v2/inAppPurchases/\(iapId)/inAppPurchaseLocalizations",
+                                 as: ASCListResponse<ASCIAPLocalization>.self)
+        return resp.data
+    }
+
+    func patchIAPLocalization(locId: String, fields: [String: String]) async throws {
+        let body: [String: Any] = [
+            "data": [
+                "type": "inAppPurchaseLocalizations",
+                "id": locId,
+                "attributes": fields
+            ]
+        ]
+        try await patch(path: "inAppPurchaseLocalizations/\(locId)", body: body)
+    }
+
+    // MARK: - Subscription Editing
+
+    func patchSubscription(subscriptionId: String, attrs: [String: Any]) async throws {
+        let body: [String: Any] = [
+            "data": [
+                "type": "subscriptions",
+                "id": subscriptionId,
+                "attributes": attrs
+            ]
+        ]
+        try await patch(path: "subscriptions/\(subscriptionId)", body: body)
+    }
+
+    func fetchSubscriptionLocalizations(subscriptionId: String) async throws -> [ASCSubscriptionLocalization] {
+        let resp = try await get("subscriptions/\(subscriptionId)/subscriptionLocalizations",
+                                 as: ASCListResponse<ASCSubscriptionLocalization>.self)
+        return resp.data
+    }
+
+    func patchSubscriptionLocalization(locId: String, fields: [String: String]) async throws {
+        let body: [String: Any] = [
+            "data": [
+                "type": "subscriptionLocalizations",
+                "id": locId,
+                "attributes": fields
+            ]
+        ]
+        try await patch(path: "subscriptionLocalizations/\(locId)", body: body)
+    }
+
+    // MARK: - Subscription Group Localization
+
+    func fetchSubscriptionGroupLocalizations(groupId: String) async throws -> [ASCSubscriptionGroupLocalization] {
+        let resp = try await get("subscriptionGroups/\(groupId)/subscriptionGroupLocalizations",
+                                 as: ASCListResponse<ASCSubscriptionGroupLocalization>.self)
+        return resp.data
+    }
+
+    func patchSubscriptionGroupLocalization(locId: String, name: String) async throws {
+        let body: [String: Any] = [
+            "data": [
+                "type": "subscriptionGroupLocalizations",
+                "id": locId,
+                "attributes": ["name": name]
+            ]
+        ]
+        try await patch(path: "subscriptionGroupLocalizations/\(locId)", body: body)
+    }
+
+    // MARK: - IAP Review Screenshot
+
+    func uploadIAPReviewScreenshot(iapId: String, path: String) async throws {
+        let fileURL = URL(fileURLWithPath: path)
+        let fileData = try Data(contentsOf: fileURL)
+        let fileName = fileURL.lastPathComponent
+
+        // Reserve
+        let reserveBody: [String: Any] = [
+            "data": [
+                "type": "inAppPurchaseAppStoreReviewScreenshots",
+                "attributes": ["fileName": fileName, "fileSize": fileData.count],
+                "relationships": [
+                    "inAppPurchaseV2": ["data": ["type": "inAppPurchases", "id": iapId]]
+                ]
+            ] as [String: Any]
+        ]
+        let reserveData = try await post(path: "inAppPurchaseAppStoreReviewScreenshots", body: reserveBody)
+        let reserved = try JSONDecoder().decode(ASCSingleResponse<ASCScreenshotReservation>.self, from: reserveData)
+        let screenshotId = reserved.data.id
+
+        // Upload chunks
+        for op in reserved.data.attributes.uploadOperations ?? [] {
+            guard let uploadURL = URL(string: op.url) else { continue }
+            let chunk = fileData[op.offset..<min(op.offset + op.length, fileData.count)]
+            var headers = [String: String]()
+            for header in op.requestHeaders { headers[header.name] = header.value }
+            try await upload(url: uploadURL, method: op.method, headers: headers, body: Data(chunk))
+        }
+
+        // Commit
+        let commitBody: [String: Any] = [
+            "data": [
+                "type": "inAppPurchaseAppStoreReviewScreenshots",
+                "id": screenshotId,
+                "attributes": ["uploaded": true, "sourceFileChecksum": reserved.data.attributes.sourceFileChecksum ?? ""]
+            ]
+        ]
+        try await patch(path: "inAppPurchaseAppStoreReviewScreenshots/\(screenshotId)", body: commitBody)
+    }
+
+    // MARK: - Subscription Review Screenshot
+
+    func uploadSubscriptionReviewScreenshot(subscriptionId: String, path: String) async throws {
+        let fileURL = URL(fileURLWithPath: path)
+        let fileData = try Data(contentsOf: fileURL)
+        let fileName = fileURL.lastPathComponent
+
+        // Reserve
+        let reserveBody: [String: Any] = [
+            "data": [
+                "type": "subscriptionAppStoreReviewScreenshots",
+                "attributes": ["fileName": fileName, "fileSize": fileData.count],
+                "relationships": [
+                    "subscription": ["data": ["type": "subscriptions", "id": subscriptionId]]
+                ]
+            ] as [String: Any]
+        ]
+        let reserveData = try await post(path: "subscriptionAppStoreReviewScreenshots", body: reserveBody)
+        let reserved = try JSONDecoder().decode(ASCSingleResponse<ASCScreenshotReservation>.self, from: reserveData)
+        let screenshotId = reserved.data.id
+
+        // Upload chunks
+        for op in reserved.data.attributes.uploadOperations ?? [] {
+            guard let uploadURL = URL(string: op.url) else { continue }
+            let chunk = fileData[op.offset..<min(op.offset + op.length, fileData.count)]
+            var headers = [String: String]()
+            for header in op.requestHeaders { headers[header.name] = header.value }
+            try await upload(url: uploadURL, method: op.method, headers: headers, body: Data(chunk))
+        }
+
+        // Commit
+        let commitBody: [String: Any] = [
+            "data": [
+                "type": "subscriptionAppStoreReviewScreenshots",
+                "id": screenshotId,
+                "attributes": ["uploaded": true, "sourceFileChecksum": reserved.data.attributes.sourceFileChecksum ?? ""]
+            ]
+        ]
+        try await patch(path: "subscriptionAppStoreReviewScreenshots/\(screenshotId)", body: commitBody)
+    }
+
     // MARK: - Write: Screenshot Upload
 
     func uploadScreenshot(localizationId: String, path: String, displayType: String) async throws {
@@ -698,6 +1320,25 @@ final class AppStoreConnectService {
         let data = try await post(path: "profiles", body: body)
         let result = try JSONDecoder().decode(ASCSingleResponse<ASCProfile>.self, from: data)
         return result.data
+    }
+
+    // MARK: - Bundle ID Capabilities
+
+    func enableCapability(bundleIdResourceId: String, capabilityType: String) async throws {
+        let body: [String: Any] = [
+            "data": [
+                "type": "bundleIdCapabilities",
+                "attributes": [
+                    "capabilityType": capabilityType
+                ],
+                "relationships": [
+                    "bundleId": [
+                        "data": ["type": "bundleIds", "id": bundleIdResourceId]
+                    ]
+                ]
+            ] as [String: Any]
+        ]
+        _ = try await post(path: "bundleIdCapabilities", body: body)
     }
 
     // MARK: - Build Polling

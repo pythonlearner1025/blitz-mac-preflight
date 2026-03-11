@@ -15,7 +15,7 @@ enum AppTab: String, CaseIterable, Identifiable {
     case storeListing
     case screenshots
     case appDetails
-    case pricing
+    case monetization
     case review
 
     // Insights group
@@ -35,7 +35,7 @@ enum AppTab: String, CaseIterable, Identifiable {
 
     var isASCTab: Bool {
         switch self {
-        case .ascOverview, .storeListing, .screenshots, .appDetails, .pricing, .review,
+        case .ascOverview, .storeListing, .screenshots, .appDetails, .monetization, .review,
              .analytics, .reviews, .builds, .groups, .betaInfo, .feedback:
             return true
         default:
@@ -53,7 +53,7 @@ enum AppTab: String, CaseIterable, Identifiable {
         case .storeListing: "Store Listing"
         case .screenshots: "Screenshots"
         case .appDetails: "App Details"
-        case .pricing: "Pricing"
+        case .monetization: "Monetization"
         case .review: "Review"
         case .analytics: "Analytics"
         case .reviews: "Reviews"
@@ -75,7 +75,7 @@ enum AppTab: String, CaseIterable, Identifiable {
         case .storeListing: "text.page"
         case .screenshots: "photo.on.rectangle"
         case .appDetails: "info.circle"
-        case .pricing: "dollarsign.circle"
+        case .monetization: "dollarsign.circle"
         case .review: "star"
         case .analytics: "chart.line.uptrend.xyaxis"
         case .reviews: "bubble.left.and.bubble.right"
@@ -96,7 +96,7 @@ enum AppTab: String, CaseIterable, Identifiable {
         var tabs: [AppTab] {
             switch self {
             case .build: [.simulator, .database, .tests, .assets]
-            case .release: [.ascOverview, .storeListing, .screenshots, .appDetails, .pricing, .review]
+            case .release: [.ascOverview, .storeListing, .screenshots, .appDetails, .monetization, .review]
             case .insights: [.analytics, .reviews]
             case .testFlight: [.builds, .groups, .betaInfo, .feedback]
             }
@@ -105,6 +105,7 @@ enum AppTab: String, CaseIterable, Identifiable {
 }
 
 /// Root observable state for the entire app
+@MainActor
 @Observable
 final class AppState {
     // Navigation
@@ -117,7 +118,6 @@ final class AppState {
     var simulatorStream = SimulatorStreamManager()
     var recordingManager = RecordingManager()
     var issueStore = IssueStore()
-    var macroStore = MacroStore()
     var settingsStore = SettingsService.shared
     var databaseManager = DatabaseManager()
     var projectSetup = ProjectSetupManager()
@@ -149,6 +149,7 @@ final class AppState {
 
 // MARK: - Observable Managers
 
+@MainActor
 @Observable
 final class ProjectManager {
     var projects: [Project] = []
@@ -163,6 +164,7 @@ final class ProjectManager {
     }
 }
 
+@MainActor
 @Observable
 final class SimulatorManager {
     var simulators: [SimulatorInfo] = []
@@ -224,6 +226,7 @@ final class SimulatorManager {
     }
 }
 
+@MainActor
 @Observable
 final class SimulatorStreamManager {
     let captureService = SimulatorCaptureService()
@@ -321,10 +324,12 @@ final class SimulatorStreamManager {
         fpsTimer?.invalidate()
         lastFrameCount = captureService.frameCount
         fpsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            let current = self.captureService.frameCount
-            self.fps = current - self.lastFrameCount
-            self.lastFrameCount = current
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let current = self.captureService.frameCount
+                self.fps = current - self.lastFrameCount
+                self.lastFrameCount = current
+            }
         }
     }
 
@@ -335,6 +340,7 @@ final class SimulatorStreamManager {
     }
 }
 
+@MainActor
 @Observable
 final class RecordingManager {
     var isRecording = false
@@ -342,6 +348,7 @@ final class RecordingManager {
     var recentRecordings: [RecordingMeta] = []
 }
 
+@MainActor
 @Observable
 final class IssueStore {
     var issues: [Issue] = []
@@ -356,14 +363,8 @@ final class IssueStore {
     }
 }
 
-@Observable
-final class MacroStore {
-    var macros: [Macro] = []
-    var isRecording = false
-    var isPlaying = false
-    var currentRecordingActions: [MacroAction] = []
-}
 
+@MainActor
 @Observable
 final class ProjectSetupManager {
     var isSettingUp = false
@@ -418,6 +419,7 @@ final class ProjectSetupManager {
     }
 }
 
+@MainActor
 @Observable
 final class DatabaseManager {
     // Connection & data state
@@ -480,19 +482,15 @@ final class DatabaseManager {
 
         do {
             let settings = try await client.fetchSchema()
-            await MainActor.run {
-                self.schema = settings
-                self.connectionStatus = .connected
-                self.errorMessage = nil
-                if self.selectedTable == nil, let first = settings.tables.first {
-                    self.selectedTable = first
-                }
+            self.schema = settings
+            self.connectionStatus = .connected
+            self.errorMessage = nil
+            if self.selectedTable == nil, let first = settings.tables.first {
+                self.selectedTable = first
             }
         } catch {
-            await MainActor.run {
-                self.connectionStatus = .error
-                self.errorMessage = "Connected but schema fetch failed: \(error.localizedDescription)"
-            }
+            self.connectionStatus = .error
+            self.errorMessage = "Connected but schema fetch failed: \(error.localizedDescription)"
         }
     }
 
@@ -503,7 +501,12 @@ final class DatabaseManager {
             if !searchText.isEmpty {
                 let textFields = table.fields.filter { ($0.type ?? "text") == "text" || ($0.sqlType ?? "") == "text" }
                 if !textFields.isEmpty {
-                    let clauses = textFields.map { "\($0.name) LIKE '%\(searchText)%'" }
+                    let escaped = searchText
+                        .replacingOccurrences(of: "'", with: "''")
+                        .replacingOccurrences(of: "\\", with: "\\\\")
+                        .replacingOccurrences(of: "%", with: "\\%")
+                        .replacingOccurrences(of: "_", with: "\\_")
+                    let clauses = textFields.map { "\($0.name) LIKE '%\(escaped)%'" }
                     whereClause = clauses.joined(separator: " OR ")
                 }
             }
@@ -516,14 +519,10 @@ final class DatabaseManager {
                 ascending: sortAscending,
                 where: whereClause
             )
-            await MainActor.run {
-                self.rows = result.items
-                self.totalRows = result.total
-            }
+            self.rows = result.items
+            self.totalRows = result.total
         } catch {
-            await MainActor.run {
-                self.errorMessage = error.localizedDescription
-            }
+            self.errorMessage = error.localizedDescription
         }
     }
 
@@ -533,9 +532,7 @@ final class DatabaseManager {
             _ = try await client.insertRecord(table: table.name, values: values)
             await loadRows()
         } catch {
-            await MainActor.run {
-                self.errorMessage = error.localizedDescription
-            }
+            self.errorMessage = error.localizedDescription
         }
     }
 
@@ -545,9 +542,7 @@ final class DatabaseManager {
             _ = try await client.updateRecord(table: table.name, id: id, values: values)
             await loadRows()
         } catch {
-            await MainActor.run {
-                self.errorMessage = error.localizedDescription
-            }
+            self.errorMessage = error.localizedDescription
         }
     }
 
@@ -557,9 +552,7 @@ final class DatabaseManager {
             _ = try await client.deleteRecord(table: table.name, id: id)
             await loadRows()
         } catch {
-            await MainActor.run {
-                self.errorMessage = error.localizedDescription
-            }
+            self.errorMessage = error.localizedDescription
         }
     }
 
@@ -581,7 +574,7 @@ final class DatabaseManager {
         for line in content.components(separatedBy: .newlines) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { continue }
-            if trimmed.hasPrefix(key) {
+            if trimmed.hasPrefix(key + "=") || trimmed.hasPrefix(key + " ") {
                 let parts = trimmed.split(separator: "=", maxSplits: 1)
                 if parts.count == 2 {
                     return String(parts[1]).trimmingCharacters(in: .whitespaces)

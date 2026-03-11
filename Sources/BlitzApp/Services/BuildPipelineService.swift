@@ -42,8 +42,7 @@ actor BuildPipelineService {
     private let fm = FileManager.default
 
     private func signingStateURL(bundleId: String) -> URL {
-        let home = fm.homeDirectoryForCurrentUser
-        return home.appendingPathComponent(".blitz/signing/\(bundleId)/signing-state.json")
+        return BlitzPaths.signing(bundleId: bundleId).appendingPathComponent("signing-state.json")
     }
 
     private func loadSigningState(bundleId: String) -> SigningState {
@@ -121,8 +120,7 @@ actor BuildPipelineService {
                 certificateId = cert.id
             } else {
                 emit("No distribution certificate found. Creating one...")
-                let signingDir = fm.homeDirectoryForCurrentUser
-                    .appendingPathComponent(".blitz/signing/\(bundleId)")
+                let signingDir = BlitzPaths.signing(bundleId: bundleId)
                 try fm.createDirectory(at: signingDir, withIntermediateDirectories: true)
 
                 let keyPath = signingDir.appendingPathComponent("dist.key").path
@@ -133,6 +131,7 @@ actor BuildPipelineService {
                     "genrsa", "-out", keyPath, "2048"
                 ], timeout: 30)
                 emit("Generated RSA private key")
+                try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: keyPath)
 
                 // Generate CSR
                 try await ProcessRunner.run("openssl", arguments: [
@@ -165,6 +164,7 @@ actor BuildPipelineService {
                         "-inkey", keyPath, "-in", pemPath,
                         "-out", p12Path, "-passout", "pass:"
                     ], timeout: 30)
+                    try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: p12Path)
 
                     // Import to keychain
                     try await ProcessRunner.run("security", arguments: [

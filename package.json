@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "build:sidecar":    "node scripts/build-server.mjs",
-    "build:app":        "bash scripts/bundle.sh release",
+    "build:app":        "killall Blitz || true && bash scripts/bundle.sh release && open .build/Blitz.app",
     "build:pkg":        "bash scripts/build-pkg.sh",
     "deploy":           "bash scripts/deploy-pkg.sh",
     "deploy:snapshot":  "bash scripts/deploy-pkg.sh --snapshot",

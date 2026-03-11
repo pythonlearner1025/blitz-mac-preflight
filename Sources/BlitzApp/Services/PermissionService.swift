@@ -2,6 +2,7 @@ import Foundation
 import ScreenCaptureKit
 
 /// Manages system permissions (screen recording, accessibility, camera)
+@MainActor
 @Observable
 final class PermissionService {
     var screenRecordingGranted = false

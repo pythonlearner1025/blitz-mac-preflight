@@ -1,6 +1,8 @@
 import SwiftUI
+import BlitzCore
 
 /// Manages MCP server lifecycle independently of SwiftUI view callbacks.
+@MainActor
 final class MCPBootstrap {
     static let shared = MCPBootstrap()
     private(set) var server: MCPServerService?
@@ -12,8 +14,7 @@ final class MCPBootstrap {
 
         installBridgeScript()
 
-        let deviceInteraction = DeviceInteractionService()
-        let server = MCPServerService(appState: appState, deviceInteraction: deviceInteraction)
+        let server = MCPServerService(appState: appState)
         self.server = server
         appState.mcpServer = server
 
@@ -28,18 +29,15 @@ final class MCPBootstrap {
 
     func shutdown() {
         guard let server else { return }
-        let sem = DispatchSemaphore(value: 0)
-        Task {
-            await server.stop()
-            sem.signal()
-        }
-        sem.wait()
+        // Fire-and-forget — app is terminating
+        Task.detached { await server.stop() }
+        // Brief wait to allow cleanup
+        Thread.sleep(forTimeInterval: 0.1)
     }
 
     private func installBridgeScript() {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let destDir = home.appendingPathComponent(".blitz")
-        let destFile = destDir.appendingPathComponent("blitz-mcp-bridge.sh")
+        let destDir = BlitzPaths.root
+        let destFile = BlitzPaths.mcpBridge
 
         if let bundlePath = Bundle.main.path(forResource: "blitz-mcp-bridge", ofType: "sh") {
             try? FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
@@ -118,7 +116,6 @@ struct BlitzApp: App {
             WelcomeWindow(appState: appState)
                 .frame(width: 700, height: 440)
                 .onAppear {
-                    NSApp.appearance = NSAppearance(named: .darkAqua)
                     appState.settingsStore.load()
                     appDelegate.appState = appState
                 }

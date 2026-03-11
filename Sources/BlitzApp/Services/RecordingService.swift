@@ -18,14 +18,16 @@ final class RecordingService: @unchecked Sendable {
     private(set) var recordingHeight: Int = 0
 
     /// Start a new recording
-    func startRecording(width: Int, height: Int) throws {
+    func startRecording(width: Int, height: Int, format: String = "mov") throws {
         guard !isWriting else { return }
 
         let tempDir = FileManager.default.temporaryDirectory
-        let filename = "blitz-recording-\(Int(Date().timeIntervalSince1970)).mov"
+        let ext = format == "mp4" ? "mp4" : "mov"
+        let filename = "blitz-recording-\(Int(Date().timeIntervalSince1970)).\(ext)"
         let url = tempDir.appendingPathComponent(filename)
 
-        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        let fileType: AVFileType = format == "mp4" ? .mp4 : .mov
+        let writer = try AVAssetWriter(outputURL: url, fileType: fileType)
 
         // H.264 video settings
         let videoSettings: [String: Any] = [

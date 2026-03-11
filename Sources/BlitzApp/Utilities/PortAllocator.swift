@@ -1,4 +1,7 @@
 import Foundation
+import os
+
+private let logger = Logger(subsystem: "com.blitz.macos", category: "PortAllocator")
 
 /// Find a free TCP port
 struct PortAllocator {
@@ -11,7 +14,7 @@ struct PortAllocator {
 
         let sock = socket(AF_INET, SOCK_STREAM, 0)
         guard sock >= 0 else {
-            print("[PortAllocator] socket() failed: \(errno)")
+            logger.error("socket() failed: \(errno)")
             return 0
         }
         defer { close(sock) }
@@ -26,20 +29,24 @@ struct PortAllocator {
         }
 
         guard bindResult == 0 else {
-            print("[PortAllocator] bind() failed: \(errno)")
+            logger.error("bind() failed: \(errno)")
             return 0
         }
 
         var boundAddr = sockaddr_in()
         var addrLen = socklen_t(MemoryLayout<sockaddr_in>.size)
-        withUnsafeMutablePointer(to: &boundAddr) { ptr in
+        let gsnResult = withUnsafeMutablePointer(to: &boundAddr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
                 getsockname(sock, sockPtr, &addrLen)
             }
         }
 
+        guard gsnResult == 0 else {
+            logger.error("getsockname() failed: \(errno)")
+            return 0
+        }
+
         let port = UInt16(bigEndian: boundAddr.sin_port)
-        print("[PortAllocator] found port: \(port)")
         return port
     }
 }

@@ -43,75 +43,89 @@ actor UnixSocketHTTP {
             requestData.append(body)
         }
 
-        // Connect to Unix socket
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else {
-            throw SocketError.connectionFailed("Failed to create socket")
-        }
+        let socketPath = self.socketPath
 
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let pathBytes = socketPath.utf8CString
-        withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
-            pathBytes.withUnsafeBufferPointer { buf in
-                let ptr = sunPath.withMemoryRebound(to: CChar.self, capacity: 104) { $0 }
-                for i in 0..<min(buf.count, 104) {
-                    ptr[i] = buf[i]
+        // Perform blocking socket I/O off the actor's executor
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+                guard fd >= 0 else {
+                    continuation.resume(throwing: SocketError.connectionFailed("Failed to create socket"))
+                    return
                 }
+
+                var addr = sockaddr_un()
+                addr.sun_family = sa_family_t(AF_UNIX)
+                let pathBytes = socketPath.utf8CString
+                let pathSize = MemoryLayout<sockaddr_un>.size - MemoryLayout.offset(of: \sockaddr_un.sun_path)!
+                withUnsafeMutablePointer(to: &addr.sun_path) { sunPath in
+                    pathBytes.withUnsafeBufferPointer { buf in
+                        let ptr = sunPath.withMemoryRebound(to: CChar.self, capacity: pathSize) { $0 }
+                        for i in 0..<min(buf.count, pathSize) {
+                            ptr[i] = buf[i]
+                        }
+                    }
+                }
+
+                let connectResult = withUnsafePointer(to: &addr) { ptr in
+                    ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+                        connect(fd, sockPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+                    }
+                }
+
+                guard connectResult == 0 else {
+                    close(fd)
+                    continuation.resume(throwing: SocketError.connectionFailed("Failed to connect to \(socketPath)"))
+                    return
+                }
+
+                // Send request
+                var totalSent = 0
+                requestData.withUnsafeBytes { buf in
+                    while totalSent < buf.count {
+                        let sent = send(fd, buf.baseAddress! + totalSent, buf.count - totalSent, 0)
+                        if sent <= 0 { break }
+                        totalSent += sent
+                    }
+                }
+
+                // Read response
+                var responseData = Data()
+                let bufferSize = 4096
+                let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+                defer {
+                    buffer.deallocate()
+                    close(fd)
+                }
+
+                while true {
+                    let bytesRead = recv(fd, buffer, bufferSize, 0)
+                    if bytesRead <= 0 { break }
+                    responseData.append(buffer, count: bytesRead)
+                }
+
+                // Parse HTTP response
+                guard let responseString = String(data: responseData, encoding: .utf8) else {
+                    continuation.resume(throwing: SocketError.invalidResponse)
+                    return
+                }
+
+                guard let headerEnd = responseString.range(of: "\r\n\r\n") else {
+                    continuation.resume(throwing: SocketError.invalidResponse)
+                    return
+                }
+
+                let headerPart = String(responseString[..<headerEnd.lowerBound])
+                let bodyStart = responseData.count - responseString[headerEnd.upperBound...].utf8.count
+                let bodyData = responseData.subdata(in: bodyStart..<responseData.count)
+
+                let statusLine = headerPart.components(separatedBy: "\r\n").first ?? ""
+                let statusParts = statusLine.components(separatedBy: " ")
+                let statusCode = statusParts.count >= 2 ? Int(statusParts[1]) ?? 0 : 0
+
+                continuation.resume(returning: Response(statusCode: statusCode, data: bodyData))
             }
         }
-
-        let connectResult = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
-                connect(fd, sockPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
-            }
-        }
-
-        guard connectResult == 0 else {
-            close(fd)
-            throw SocketError.connectionFailed("Failed to connect to \(socketPath)")
-        }
-
-        // Send request
-        requestData.withUnsafeBytes { buf in
-            _ = send(fd, buf.baseAddress!, buf.count, 0)
-        }
-
-        // Read response
-        var responseData = Data()
-        let bufferSize = 4096
-        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
-        defer {
-            buffer.deallocate()
-            close(fd)
-        }
-
-        while true {
-            let bytesRead = recv(fd, buffer, bufferSize, 0)
-            if bytesRead <= 0 { break }
-            responseData.append(buffer, count: bytesRead)
-        }
-
-        // Parse HTTP response
-        guard let responseString = String(data: responseData, encoding: .utf8) else {
-            throw SocketError.invalidResponse
-        }
-
-        // Split headers and body
-        guard let headerEnd = responseString.range(of: "\r\n\r\n") else {
-            throw SocketError.invalidResponse
-        }
-
-        let headerPart = String(responseString[..<headerEnd.lowerBound])
-        let bodyStart = responseData.count - responseString[headerEnd.upperBound...].utf8.count
-        let bodyData = responseData.subdata(in: bodyStart..<responseData.count)
-
-        // Parse status code
-        let statusLine = headerPart.components(separatedBy: "\r\n").first ?? ""
-        let statusParts = statusLine.components(separatedBy: " ")
-        let statusCode = statusParts.count >= 2 ? Int(statusParts[1]) ?? 0 : 0
-
-        return Response(statusCode: statusCode, data: bodyData)
     }
 
     /// Convenience: GET request returning decoded JSON

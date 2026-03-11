@@ -10,7 +10,8 @@ actor NodeSidecarService {
     var isRunning: Bool { process?.isRunning ?? false }
 
     init() {
-        self.socketPath = "/tmp/blitz-\(ProcessInfo.processInfo.processIdentifier).sock"
+        self.socketPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("blitz-\(ProcessInfo.processInfo.processIdentifier).sock").path
     }
 
     /// Start the Node.js sidecar process
@@ -74,9 +75,8 @@ actor NodeSidecarService {
     /// Find the node binary
     private func findNode() async throws -> String {
         // Try common locations — includes ~/.blitz/node-runtime installed by postinstall
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
         let candidates = [
-            "\(home)/.blitz/node-runtime/bin/node",
+            BlitzPaths.nodeRuntime.path,
             "/usr/local/bin/node",
             "/opt/homebrew/bin/node",
             "/usr/bin/node"

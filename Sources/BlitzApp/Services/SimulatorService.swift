@@ -23,7 +23,8 @@ actor SimulatorService {
             try await simctl.boot(udid: udid)
         } catch {
             // "Unable to boot device in current state: Booted" is not a real error
-            if error.localizedDescription.contains("Booted") {
+            if let processError = error as? ProcessRunner.ProcessError,
+               processError.stderr.contains("current state: Booted") {
                 logger.info("Simulator already booted")
             } else {
                 throw error

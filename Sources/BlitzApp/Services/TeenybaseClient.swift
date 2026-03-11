@@ -65,8 +65,9 @@ actor TeenybaseClient {
     }
 
     func deleteRecord(table: String, id: String) async throws -> [TableRow] {
+        let escapedId = id.replacingOccurrences(of: "'", with: "''")
         let body: [String: Any] = [
-            "where": "id='\(id)'"
+            "where": "id='\(escapedId)'"
         ]
         let data = try await post("/table/\(table)/delete", body: body)
         return try decoder.decode([TableRow].self, from: data)
@@ -75,7 +76,9 @@ actor TeenybaseClient {
     // MARK: - HTTP Helpers
 
     private func get(_ path: String) async throws -> Data {
-        let url = URL(string: baseURL + "/api/v1" + path)!
+        guard let url = URL(string: baseURL + "/api/v1" + path) else {
+            throw TeenybaseError.invalidResponse
+        }
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         let (data, response) = try await session.data(for: request)
@@ -84,7 +87,9 @@ actor TeenybaseClient {
     }
 
     private func post(_ path: String, body: [String: Any]) async throws -> Data {
-        let url = URL(string: baseURL + "/api/v1" + path)!
+        guard let url = URL(string: baseURL + "/api/v1" + path) else {
+            throw TeenybaseError.invalidResponse
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")

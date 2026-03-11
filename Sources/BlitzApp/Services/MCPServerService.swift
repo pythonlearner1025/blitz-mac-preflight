@@ -4,22 +4,19 @@ import BlitzCore
 /// MCP (Model Context Protocol) HTTP server for Claude Code integration
 /// Port of server/mcp/mcp-server.ts
 actor MCPServerService {
-    private var listener: Task<Void, Never>?
+    private var acceptSource: DispatchSourceRead?
     private var serverSocket: Int32 = -1
     private(set) var port: Int = 0
     private(set) var isRunning = false
 
-    private let deviceInteraction: DeviceInteractionService
     private let toolExecutor: MCPToolExecutor
 
     private static var portFileURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".blitz/mcp-port")
+        BlitzPaths.mcpPort
     }
 
-    init(appState: AppState, deviceInteraction: DeviceInteractionService) {
-        self.deviceInteraction = deviceInteraction
-        self.toolExecutor = MCPToolExecutor(appState: appState, deviceInteraction: deviceInteraction)
+    init(appState: AppState) {
+        self.toolExecutor = MCPToolExecutor(appState: appState)
 
         // Store executor reference in AppState for approval resolution
         Task { @MainActor in
@@ -45,7 +42,7 @@ actor MCPServerService {
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
         addr.sin_port = UInt16(assignedPort).bigEndian
-        addr.sin_addr.s_addr = UInt32(INADDR_ANY).bigEndian
+        addr.sin_addr.s_addr = UInt32(0x7F000001).bigEndian
 
         let bindResult = withUnsafePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
@@ -71,31 +68,29 @@ actor MCPServerService {
 
         print("[MCP] Server listening on port \(assignedPort)")
 
-        // Accept connections in background
-        listener = Task.detached { [weak self] in
-            while !Task.isCancelled {
-                var clientAddr = sockaddr_in()
-                var addrLen = socklen_t(MemoryLayout<sockaddr_in>.size)
-
-                let clientFd = withUnsafeMutablePointer(to: &clientAddr) { ptr in
-                    ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
-                        accept(fd, sockPtr, &addrLen)
-                    }
-                }
-
-                if clientFd < 0 { continue }
-
-                Task { [weak self] in
-                    await self?.handleConnection(clientFd)
+        // Accept connections in background using DispatchSource
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .global(qos: .userInitiated))
+        source.setEventHandler { [weak self] in
+            var clientAddr = sockaddr_in()
+            var addrLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let clientFd = withUnsafeMutablePointer(to: &clientAddr) { ptr in
+                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+                    accept(fd, sockPtr, &addrLen)
                 }
             }
+            if clientFd < 0 { return }
+            Task { [weak self] in
+                await self?.handleConnection(clientFd)
+            }
         }
+        source.resume()
+        self.acceptSource = source as? DispatchSource
     }
 
     /// Stop the MCP server
     func stop() {
-        listener?.cancel()
-        listener = nil
+        acceptSource?.cancel()
+        acceptSource = nil
         if serverSocket >= 0 {
             close(serverSocket)
             serverSocket = -1
@@ -178,7 +173,10 @@ actor MCPServerService {
         do {
             responseBody = try await routeRequest(method: method, path: path, body: body)
         } catch {
-            let errorJson = "{\"error\": \"\(error.localizedDescription)\"}"
+            let escapedError = error.localizedDescription
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            let errorJson = "{\"error\": \"\(escapedError)\"}"
             sendHTTPResponse(fd: fd, statusCode: 500, body: errorJson)
             return
         }

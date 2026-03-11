@@ -88,21 +88,23 @@ struct AppCommands: Commands {
         // Build menu
         CommandMenu("Build") {
             Button("Run") {
-                // Start runtime for active project
+                guard let project = appState.activeProject else { return }
+                Task {
+                    await appState.simulatorManager.bootIfNeeded()
+                    await appState.simulatorStream.startStreaming(
+                        bootedDeviceId: appState.simulatorManager.bootedDeviceId,
+                        fps: appState.settingsStore.simulatorFPS
+                    )
+                }
             }
             .keyboardShortcut("r", modifiers: .command)
+            .disabled(appState.activeProjectId == nil)
 
             Button("Stop") {
-                // Stop runtime
+                Task { await appState.simulatorStream.stopStreaming() }
             }
             .keyboardShortcut(".", modifiers: .command)
-
-            Divider()
-
-            Button("Reload Metro") {
-                // Reload Metro bundler
-            }
-            .keyboardShortcut("r", modifiers: [.command, .shift])
+            .disabled(!appState.simulatorStream.isCapturing)
         }
     }
 

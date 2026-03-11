@@ -6,8 +6,7 @@ struct ProjectStorage {
     let baseDirectory: URL
 
     init() {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        self.baseDirectory = home.appendingPathComponent(".blitz/projects")
+        self.baseDirectory = BlitzPaths.projects
     }
 
     /// List all projects in ~/.blitz/projects/
@@ -72,7 +71,19 @@ struct ProjectStorage {
     /// Delete a project directory
     func deleteProject(projectId: String) throws {
         let projectDir = baseDirectory.appendingPathComponent(projectId)
-        try FileManager.default.removeItem(at: projectDir)
+        let path = projectDir.path
+        // Check if this is a symlink — if so, only remove the symlink itself, not the target
+        var isSymlink = false
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+           attrs[.type] as? FileAttributeType == .typeSymbolicLink {
+            isSymlink = true
+        }
+        if isSymlink {
+            // unlink only removes the symlink, not the target directory
+            unlink(path)
+        } else {
+            try FileManager.default.removeItem(at: projectDir)
+        }
     }
 
     /// Open a project at the given URL. Validates .blitz/project.json exists,
@@ -83,19 +94,29 @@ struct ProjectStorage {
             throw ProjectOpenError.notABlitzProject
         }
 
-        let folderName = url.lastPathComponent
-
-        // Check if already registered
+        var folderName = url.lastPathComponent
         let existingDir = baseDirectory.appendingPathComponent(folderName)
+
         if FileManager.default.fileExists(atPath: existingDir.path) {
-            // Already registered — update lastOpenedAt
-            updateLastOpened(projectId: folderName)
-            return folderName
+            // Check if it resolves to the same location
+            let resolvedExisting = existingDir.resolvingSymlinksInPath().path
+            let resolvedNew = url.resolvingSymlinksInPath().path
+            if resolvedExisting == resolvedNew {
+                updateLastOpened(projectId: folderName)
+                return folderName
+            }
+            // Name collision with different project — disambiguate
+            var counter = 2
+            while FileManager.default.fileExists(
+                atPath: baseDirectory.appendingPathComponent("\(folderName)-\(counter)").path
+            ) { counter += 1 }
+            folderName = "\(folderName)-\(counter)"
         }
 
         // Create symlink: ~/.blitz/projects/{folderName} → selectedPath
+        let symlinkDir = baseDirectory.appendingPathComponent(folderName)
         try FileManager.default.createDirectory(at: baseDirectory, withIntermediateDirectories: true)
-        try FileManager.default.createSymbolicLink(at: existingDir, withDestinationURL: url)
+        try FileManager.default.createSymbolicLink(at: symlinkDir, withDestinationURL: url)
 
         updateLastOpened(projectId: folderName)
         return folderName
@@ -105,20 +126,28 @@ struct ProjectStorage {
     func updateLastOpened(projectId: String) {
         guard var metadata = readMetadata(projectId: projectId) else { return }
         metadata.lastOpenedAt = Date()
-        try? writeMetadata(projectId: projectId, metadata: metadata)
+        do {
+            try writeMetadata(projectId: projectId, metadata: metadata)
+        } catch {
+            print("[ProjectStorage] Failed to update lastOpenedAt for \(projectId): \(error)")
+        }
     }
 
-    /// Ensure .mcp.json contains the blitz-macos MCP server entry.
+    /// Ensure .mcp.json contains blitz-macos and blitz-iphone MCP server entries.
     /// If the file exists, merges into the existing mcpServers key without overwriting other entries.
     /// If it doesn't exist, creates it.
     func ensureMCPConfig(projectId: String) {
         let projectDir = baseDirectory.appendingPathComponent(projectId)
         let mcpFile = projectDir.appendingPathComponent(".mcp.json")
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let bridgePath = BlitzPaths.mcpBridge.path
 
-        let blitzEntry: [String: Any] = [
+        let blitzMacosEntry: [String: Any] = [
             "command": "bash",
-            "args": ["\(home)/.blitz/blitz-mcp-bridge.sh"]
+            "args": [bridgePath]
+        ]
+        let blitzIphoneEntry: [String: Any] = [
+            "command": "npx",
+            "args": ["-y", "@blitzdev/iphone-mcp"]
         ]
 
         var root: [String: Any]
@@ -126,14 +155,22 @@ struct ProjectStorage {
            let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             root = existing
             var servers = root["mcpServers"] as? [String: Any] ?? [:]
-            servers["blitz-macos"] = blitzEntry
+            servers["blitz-macos"] = blitzMacosEntry
+            servers["blitz-iphone"] = blitzIphoneEntry
             root["mcpServers"] = servers
         } else {
-            root = ["mcpServers": ["blitz-macos": blitzEntry]]
+            root = ["mcpServers": [
+                "blitz-macos": blitzMacosEntry,
+                "blitz-iphone": blitzIphoneEntry
+            ]]
         }
 
         guard let data = try? JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]) else { return }
-        try? data.write(to: mcpFile)
+        do {
+            try data.write(to: mcpFile)
+        } catch {
+            print("[ProjectStorage] Failed to write .mcp.json: \(error)")
+        }
     }
 
     /// Ensure CLAUDE.md and .claude/settings.local.json exist for a project.
@@ -156,7 +193,7 @@ struct ProjectStorage {
                         "mcp__blitz-macos__get_project_state",
                     ]
                 ],
-                "enabledMcpjsonServers": ["blitz-macos"],
+                "enabledMcpjsonServers": ["blitz-macos", "blitz-iphone"],
             ]
             if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
                 try? data.write(to: settingsFile)

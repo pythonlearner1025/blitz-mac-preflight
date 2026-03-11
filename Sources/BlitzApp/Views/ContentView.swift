@@ -22,6 +22,7 @@ struct ContentView: View {
     @Bindable var appState: AppState
     @Environment(\.openWindow) private var openWindow
     @State private var mainWindow: NSWindow?
+    @State private var tabSwitchTask: Task<Void, Never>?
 
     /// Consume pendingSetupProjectId and run project scaffolding if needed.
     private func startPendingSetupIfNeeded() async {
@@ -100,7 +101,8 @@ struct ContentView: View {
             }
         }
         .onChange(of: appState.activeTab) { oldTab, newTab in
-            Task {
+            tabSwitchTask?.cancel()
+            tabSwitchTask = Task {
                 // Pause stream when leaving simulator tab
                 if oldTab == .simulator && newTab != .simulator {
                     await appState.simulatorStream.pauseStream()
@@ -160,6 +162,20 @@ struct DetailView: View {
 
     @ViewBuilder
     private var tabContent: some View {
+        ZStack {
+            // Keep MonetizationView alive so creation progress survives tab switches
+            MonetizationView(appState: appState)
+                .opacity(appState.activeTab == .monetization ? 1 : 0)
+                .allowsHitTesting(appState.activeTab == .monetization)
+
+            if appState.activeTab != .monetization {
+                activeTabView
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var activeTabView: some View {
         switch appState.activeTab {
         case .simulator:
             SimulatorView(appState: appState)
@@ -177,8 +193,8 @@ struct DetailView: View {
             ScreenshotsView(appState: appState)
         case .appDetails:
             AppDetailsView(appState: appState)
-        case .pricing:
-            PricingView(appState: appState)
+        case .monetization:
+            EmptyView() // handled above
         case .review:
             ReviewView(appState: appState)
         case .analytics:

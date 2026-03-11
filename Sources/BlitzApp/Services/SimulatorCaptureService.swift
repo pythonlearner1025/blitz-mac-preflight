@@ -31,6 +31,7 @@ final class SimulatorCaptureService: NSObject, @unchecked Sendable {
     var onFrame: ((CVPixelBuffer) -> Void)?
 
     private var skipFrameCount = 0
+    private var configuredFPS: Int = 30
 
     private let simulatorBundleIDs = [
         "com.apple.iphonesimulator",
@@ -60,6 +61,7 @@ final class SimulatorCaptureService: NSObject, @unchecked Sendable {
         }
 
         logger.info("Starting capture at \(fps) FPS...")
+        self.configuredFPS = fps
 
         // Step 1: Query SCShareableContent ONCE to get permission sorted out.
         // If this throws, it's a permission error — bail immediately, no retry.
@@ -98,8 +100,7 @@ final class SimulatorCaptureService: NSObject, @unchecked Sendable {
         let filter = SCContentFilter(desktopIndependentWindow: window)
         let config = SCStreamConfiguration()
 
-        // Retina 2x
-        let scale: CGFloat = 2.0
+        let scale: CGFloat = await MainActor.run { NSScreen.main?.backingScaleFactor ?? 2.0 }
         config.width = Int(window.frame.width * scale)
         config.height = Int(window.frame.height * scale)
         config.pixelFormat = kCVPixelFormatType_32BGRA
@@ -170,7 +171,7 @@ final class SimulatorCaptureService: NSObject, @unchecked Sendable {
     private func checkForResize() async {
         guard isCapturing, let window = currentWindow else { return }
 
-        let scale: CGFloat = 2.0
+        let scale: CGFloat = await MainActor.run { NSScreen.main?.backingScaleFactor ?? 2.0 }
         let newWidth = Int(window.frame.width * scale)
         let newHeight = Int(window.frame.height * scale)
 
@@ -182,7 +183,7 @@ final class SimulatorCaptureService: NSObject, @unchecked Sendable {
         config.width = newWidth
         config.height = newHeight
         config.pixelFormat = kCVPixelFormatType_32BGRA
-        config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+        config.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(configuredFPS))
         config.queueDepth = 3
         config.showsCursor = false
         config.capturesAudio = false

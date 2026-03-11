@@ -61,14 +61,14 @@ struct SimulatorConfigDatabase {
     static func config(for deviceName: String?) -> SimulatorDeviceConfig {
         guard let name = deviceName else { return defaultConfig }
 
-        // Exact match
+        // Exact match first
         if let config = devices[name] { return config }
 
-        // Fuzzy match — device name might include iOS version etc.
-        for (key, config) in devices {
-            if name.contains(key) || key.contains(name) {
-                return config
-            }
+        // Fuzzy match — sort by key length descending so more specific names match first
+        // e.g. "iPhone 16 Pro" matches before "iPhone 16"
+        let sorted = devices.keys.sorted { $0.count > $1.count }
+        for key in sorted {
+            if name.contains(key) { return devices[key]! }
         }
 
         return defaultConfig

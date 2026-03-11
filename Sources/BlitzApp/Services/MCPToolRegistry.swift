@@ -22,7 +22,7 @@ enum MCPToolRegistry {
             properties: [
                 "tab": ["type": "string", "description": "Tab name", "enum": [
                     "simulator", "database", "tests", "assets",
-                    "ascOverview", "storeListing", "screenshots", "appDetails", "pricing", "review",
+                    "ascOverview", "storeListing", "screenshots", "appDetails", "monetization", "review",
                     "analytics", "reviews",
                     "builds", "groups", "betaInfo", "feedback",
                     "settings"
@@ -106,121 +106,6 @@ enum MCPToolRegistry {
             required: ["udid"]
         ))
 
-        tools.append(tool(
-            name: "simulator_start_streaming",
-            description: "Start screen capture streaming from the simulator",
-            properties: [:],
-            required: []
-        ))
-
-        tools.append(tool(
-            name: "simulator_stop_streaming",
-            description: "Stop screen capture streaming",
-            properties: [:],
-            required: []
-        ))
-
-        tools.append(tool(
-            name: "simulator_press_home",
-            description: "Press the home button on the simulator",
-            properties: [
-                "udid": ["type": "string", "description": "Device UDID (optional)"]
-            ],
-            required: []
-        ))
-
-        tools.append(tool(
-            name: "simulator_send_text",
-            description: "Send keyboard text to the simulator",
-            properties: [
-                "text": ["type": "string", "description": "Text to type"],
-                "udid": ["type": "string", "description": "Device UDID (optional)"]
-            ],
-            required: ["text"]
-        ))
-
-        tools.append(tool(
-            name: "simulator_toggle_keyboard",
-            description: "Toggle the keyboard input bar visibility",
-            properties: [:],
-            required: []
-        ))
-
-        // -- Database --
-        tools.append(tool(
-            name: "db_connect",
-            description: "Connect to the active project's Teenybase database",
-            properties: [:],
-            required: []
-        ))
-
-        tools.append(tool(
-            name: "db_disconnect",
-            description: "Disconnect from the database",
-            properties: [:],
-            required: []
-        ))
-
-        tools.append(tool(
-            name: "db_list_tables",
-            description: "List all database tables",
-            properties: [:],
-            required: []
-        ))
-
-        tools.append(tool(
-            name: "db_select_table",
-            description: "Select the active table for queries",
-            properties: [
-                "table": ["type": "string", "description": "Table name"]
-            ],
-            required: ["table"]
-        ))
-
-        tools.append(tool(
-            name: "db_query_rows",
-            description: "Query rows with pagination, sorting, and search",
-            properties: [
-                "table": ["type": "string", "description": "Table name (optional, uses selected)"],
-                "limit": ["type": "integer", "description": "Max rows to return"],
-                "offset": ["type": "integer", "description": "Row offset for pagination"],
-                "orderBy": ["type": "string", "description": "Field to sort by"],
-                "ascending": ["type": "boolean", "description": "Sort ascending"],
-                "search": ["type": "string", "description": "Search text"]
-            ],
-            required: []
-        ))
-
-        tools.append(tool(
-            name: "db_insert_record",
-            description: "Insert a new record into a table",
-            properties: [
-                "table": ["type": "string", "description": "Table name (optional, uses selected)"],
-                "values": ["type": "object", "description": "Field-value pairs to insert"]
-            ],
-            required: ["values"]
-        ))
-
-        tools.append(tool(
-            name: "db_update_record",
-            description: "Update an existing record",
-            properties: [
-                "table": ["type": "string", "description": "Table name (optional, uses selected)"],
-                "id": ["type": "string", "description": "Record ID"],
-                "values": ["type": "object", "description": "Field-value pairs to update"]
-            ],
-            required: ["id", "values"]
-        ))
-
-        tools.append(tool(
-            name: "db_delete_record",
-            description: "Delete a record from a table",
-            properties: [
-                "table": ["type": "string", "description": "Table name (optional, uses selected)"],
-                "id": ["type": "string", "description": "Record ID"]
-            ],
-            required: ["id"]
-        ))
 
         // -- Settings --
         tools.append(tool(
@@ -264,82 +149,11 @@ enum MCPToolRegistry {
             required: []
         ))
 
-        // -- Device interaction (existing tools) --
-        tools.append(tool(
-            name: "describe_screen",
-            description: "Get the full UI element hierarchy of the current screen",
-            properties: [
-                "udid": ["type": "string", "description": "Device UDID"],
-                "nested": ["type": "boolean", "description": "Include nested hierarchy"]
-            ],
-            required: []
-        ))
-
-        tools.append(tool(
-            name: "device_action",
-            description: "Execute a single device action (tap, swipe, button, input-text, key)",
-            properties: [
-                "action": ["type": "string", "enum": ["tap", "swipe", "button", "input-text", "key"]],
-                "params": ["type": "object"],
-                "udid": ["type": "string"]
-            ],
-            required: ["action", "params"]
-        ))
-
-        tools.append(tool(
-            name: "device_actions",
-            description: "Execute multiple device actions in sequence",
-            properties: [
-                "actions": [
-                    "type": "array",
-                    "items": [
-                        "type": "object",
-                        "properties": [
-                            "action": ["type": "string"],
-                            "params": ["type": "object"]
-                        ]
-                    ]
-                ],
-                "udid": ["type": "string"]
-            ],
-            required: ["actions"]
-        ))
-
-        tools.append(tool(
-            name: "get_simulator_screenshot",
-            description: "Capture a screenshot of the iOS simulator",
-            properties: [
-                "udid": ["type": "string", "description": "Simulator UDID (optional, uses booted)"]
-            ],
-            required: []
-        ))
-
-        tools.append(tool(
-            name: "get_device_screenshot",
-            description: "Capture a screenshot of a physical iPhone via WebDriverAgent",
-            properties: [
-                "port": ["type": "integer", "description": "WDA port (default 8100)"],
-                "sessionId": ["type": "string", "description": "Existing WDA session ID (optional, creates new session if omitted)"]
-            ],
-            required: []
-        ))
-
         tools.append(tool(
             name: "get_blitz_screenshot",
             description: "Capture a screenshot of the Blitz macOS app main window",
             properties: [:],
             required: []
-        ))
-
-        tools.append(tool(
-            name: "scan_ui",
-            description: "Find interactive UI elements on the current screen",
-            properties: [
-                "query": ["type": "string", "description": "Search for elements matching text"],
-                "region": ["type": "string", "enum": ["full", "top-half", "bottom-half"]],
-                "udid": ["type": "string"]
-            ],
-            required: ["region"]
         ))
 
         // -- Tab State --
@@ -348,7 +162,7 @@ enum MCPToolRegistry {
             description: "Get the structured data state of any Blitz tab. Returns form field values, submission readiness, versions, builds, localizations, etc. Use this instead of screenshots to read UI state.",
             properties: [
                 "tab": ["type": "string", "description": "Tab to read state from (defaults to currently active tab)", "enum": [
-                    "ascOverview", "storeListing", "screenshots", "appDetails", "pricing", "review",
+                    "ascOverview", "storeListing", "screenshots", "appDetails", "monetization", "review",
                     "analytics", "reviews", "builds", "groups", "betaInfo", "feedback"
                 ]]
             ],
@@ -361,7 +175,7 @@ enum MCPToolRegistry {
             description: "Fill one or more App Store Connect form fields. Navigates to the tab automatically if auto-nav is enabled. See CLAUDE.md for complete field reference.",
             properties: [
                 "tab": ["type": "string", "description": "Target form tab", "enum": [
-                    "storeListing", "appDetails", "pricing", "review.ageRating", "review.contact", "settings.bundleId"
+                    "storeListing", "appDetails", "monetization", "review.ageRating", "review.contact", "settings.bundleId"
                 ]],
                 "fields": [
                     "type": "array",
@@ -397,6 +211,48 @@ enum MCPToolRegistry {
             description: "Check submission readiness and open the Submit for Review modal. Returns list of missing required fields if incomplete.",
             properties: [:],
             required: []
+        ))
+
+        // -- ASC IAP / Subscriptions / Pricing --
+        tools.append(tool(
+            name: "asc_create_iap",
+            description: "Create an in-app purchase in App Store Connect. Creates the IAP, adds en-US localization, and sets the price.",
+            properties: [
+                "productId": ["type": "string", "description": "Unique product identifier (e.g. com.app.coins100)"],
+                "name": ["type": "string", "description": "Internal reference name"],
+                "type": ["type": "string", "description": "IAP type", "enum": ["CONSUMABLE", "NON_CONSUMABLE", "NON_RENEWING_SUBSCRIPTION"]],
+                "displayName": ["type": "string", "description": "User-facing display name (en-US localization)"],
+                "price": ["type": "string", "description": "Price in USD (e.g. \"0.99\", \"4.99\")"],
+                "description": ["type": "string", "description": "User-facing description (optional)"]
+            ],
+            required: ["productId", "name", "type", "displayName", "price"]
+        ))
+
+        tools.append(tool(
+            name: "asc_create_subscription",
+            description: "Create an auto-renewable subscription in App Store Connect. Creates or reuses a subscription group, adds the subscription with en-US localization, and sets the price.",
+            properties: [
+                "groupName": ["type": "string", "description": "Subscription group name (created if doesn't exist)"],
+                "productId": ["type": "string", "description": "Unique product identifier"],
+                "name": ["type": "string", "description": "Internal reference name"],
+                "displayName": ["type": "string", "description": "User-facing display name (en-US localization)"],
+                "duration": ["type": "string", "description": "Billing period", "enum": [
+                    "ONE_WEEK", "ONE_MONTH", "TWO_MONTHS", "THREE_MONTHS", "SIX_MONTHS", "ONE_YEAR"
+                ]],
+                "price": ["type": "string", "description": "Price in USD (e.g. \"4.99\")"],
+                "description": ["type": "string", "description": "User-facing description (optional)"]
+            ],
+            required: ["groupName", "productId", "name", "displayName", "duration", "price"]
+        ))
+
+        tools.append(tool(
+            name: "asc_set_app_price",
+            description: "Set the app's price on the App Store. Use \"0\" for free. Optionally schedule a future price change with effectiveDate.",
+            properties: [
+                "price": ["type": "string", "description": "Price in USD (e.g. \"0.99\", \"0\" for free)"],
+                "effectiveDate": ["type": "string", "description": "ISO date for scheduled price change (e.g. \"2026-06-01\"). Omit for immediate change."]
+            ],
+            required: ["price"]
         ))
 
         // -- Build Pipeline --
@@ -440,27 +296,18 @@ enum MCPToolRegistry {
             return .navigation
         case "project_list", "project_get_active":
             return .query
-        case "simulator_list_devices", "simulator_press_home",
-             "simulator_send_text", "simulator_toggle_keyboard":
-            return .query
-        case "db_list_tables", "db_select_table", "db_query_rows", "db_connect":
+        case "simulator_list_devices":
             return .query
         case "settings_get":
             return .query
-        case "describe_screen", "device_action", "device_actions",
-             "get_simulator_screenshot", "get_device_screenshot",
-             "get_blitz_screenshot", "scan_ui",
-             "get_tab_state":
+        case "get_blitz_screenshot", "get_tab_state":
             return .query
 
         // Mutations
         case "project_open", "project_create", "project_import", "project_close":
             return .projectMutation
-        case "simulator_select_device", "simulator_start_streaming",
-             "simulator_stop_streaming":
+        case "simulator_select_device":
             return .simulatorControl
-        case "db_disconnect", "db_insert_record", "db_update_record", "db_delete_record":
-            return .databaseMutation
         case "settings_update", "settings_save":
             return .settingsMutation
         case "recording_start", "recording_stop":
@@ -473,13 +320,15 @@ enum MCPToolRegistry {
             return .ascScreenshotMutation
         case "asc_open_submit_preview":
             return .ascSubmitMutation
+        case "asc_create_iap", "asc_create_subscription", "asc_set_app_price":
+            return .ascFormMutation
 
         // Build pipeline tools
         case "app_store_setup_signing", "app_store_build", "app_store_upload":
             return .buildPipeline
 
         default:
-            return .query
+            return .unknown
         }
     }
 

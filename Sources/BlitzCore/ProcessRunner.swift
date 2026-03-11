@@ -22,12 +22,16 @@ public struct ProcessRunner: Sendable {
     }
 
     /// Run a command and return stdout
+    ///
+    /// - Note: Pipe reads happen on background threads concurrently with the process
+    ///   to avoid deadlocks when the pipe buffer (64KB) fills up.
     @discardableResult
     public static func run(
         _ executable: String,
         arguments: [String] = [],
         environment: [String: String]? = nil,
         currentDirectory: String? = nil,
+        // TODO: timeout is accepted for API compatibility but is not enforced
         timeout: TimeInterval = 30
     ) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
@@ -52,27 +56,61 @@ public struct ProcessRunner: Sendable {
                 process.currentDirectoryURL = URL(fileURLWithPath: dir)
             }
 
-            process.terminationHandler = { proc in
-                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-                let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
-                let stderr = String(data: stderrData, encoding: .utf8) ?? ""
+            // Use a DispatchGroup to wait for both pipe reads AND process termination.
+            // Pipes must be drained on background threads BEFORE the process exits,
+            // otherwise the process can block waiting for the pipe buffer to drain
+            // while we only start reading after termination — a classic deadlock.
+            let group = DispatchGroup()
 
-                if proc.terminationStatus == 0 {
-                    continuation.resume(returning: stdout)
-                } else {
-                    continuation.resume(throwing: ProcessError(
-                        command: "\(executable) \(arguments.joined(separator: " "))",
-                        exitCode: proc.terminationStatus,
-                        stderr: stderr.isEmpty ? stdout : stderr
-                    ))
-                }
+            var stdoutResult = ""
+            var stderrResult = ""
+
+            // Read stdout on a background thread
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                stdoutResult = String(data: data, encoding: .utf8) ?? ""
+                group.leave()
+            }
+
+            // Read stderr on a background thread
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                let data = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                stderrResult = String(data: data, encoding: .utf8) ?? ""
+                group.leave()
+            }
+
+            // Wait for process termination
+            group.enter()
+            process.terminationHandler = { _ in
+                group.leave()
             }
 
             do {
                 try process.run()
             } catch {
-                continuation.resume(throwing: error)
+                // Process failed to launch. The pipes will return empty data
+                // immediately since nothing is writing to them, so the background
+                // reads will complete on their own. We still need to wait for
+                // the group to avoid resuming the continuation twice.
+                group.notify(queue: .global(qos: .userInitiated)) {
+                    continuation.resume(throwing: error)
+                }
+                return
+            }
+
+            // Once all three (stdout read, stderr read, termination) are done, resume
+            group.notify(queue: .global(qos: .userInitiated)) {
+                if process.terminationStatus == 0 {
+                    continuation.resume(returning: stdoutResult)
+                } else {
+                    continuation.resume(throwing: ProcessError(
+                        command: "\(executable) \(arguments.joined(separator: " "))",
+                        exitCode: process.terminationStatus,
+                        stderr: stderrResult.isEmpty ? stdoutResult : stderrResult
+                    ))
+                }
             }
         }
     }

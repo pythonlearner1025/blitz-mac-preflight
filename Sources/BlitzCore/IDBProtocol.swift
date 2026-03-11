@@ -11,20 +11,19 @@ public actor IDBClient {
 
     /// Resolve the idb binary path — prefer ~/.blitz/python/bin/idb
     private static func resolveIdbPath() -> String {
-        let blitzIdb = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".blitz/python/bin/idb").path
-        if FileManager.default.fileExists(atPath: blitzIdb) {
-            return blitzIdb
+        if FileManager.default.fileExists(atPath: BlitzPaths.idbPath.path) {
+            return BlitzPaths.idbPath.path
         }
-        return "idb" // fallback to PATH
+        for path in ["/opt/homebrew/bin/idb", "/usr/local/bin/idb"] {
+            if FileManager.default.fileExists(atPath: path) { return path }
+        }
+        return "/opt/homebrew/bin/idb"
     }
 
     /// Resolve idb_companion path
     private static func resolveCompanionPath() -> String? {
-        let blitzCompanion = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".blitz/idb-companion/bin/idb_companion").path
-        if FileManager.default.fileExists(atPath: blitzCompanion) {
-            return blitzCompanion
+        if FileManager.default.fileExists(atPath: BlitzPaths.idbCompanionPath.path) {
+            return BlitzPaths.idbCompanionPath.path
         }
         // Check homebrew
         if FileManager.default.fileExists(atPath: "/opt/homebrew/bin/idb_companion") {
@@ -121,9 +120,9 @@ public actor IDBClient {
 
     /// Input text
     public func inputText(udid: String, text: String) async throws {
-        // JSON-encode the text to handle special chars
-        let escaped = text.replacingOccurrences(of: "\"", with: "\\\"")
-        try await runInShell(udid: udid, command: "ui text \"\(escaped)\" --json")
+        let jsonData = try JSONSerialization.data(withJSONObject: text)
+        let jsonString = String(data: jsonData, encoding: .utf8) ?? "\"\(text)\""
+        try await runInShell(udid: udid, command: "ui text \(jsonString) --json")
     }
 
     /// Press a button (HOME, LOCK, etc.)

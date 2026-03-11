@@ -7,14 +7,17 @@ struct ASCTabContent<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
     var body: some View {
-        if asc.isLoadingTab[tab] == true {
+        if asc.isLoadingTab[tab] == true || asc.isLoadingApp {
             VStack(spacing: 12) {
                 ProgressView()
-                Text("Loading…")
+                Text("Loading\u{2026}")
                     .foregroundStyle(.secondary)
                     .font(.callout)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if asc.app == nil && asc.credentials != nil {
+            // App not found — show bundle ID setup instead of flashing content
+            BundleIDSetupView(asc: asc, tab: tab)
         } else if let error = asc.tabError[tab] {
             VStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle")
@@ -25,18 +28,6 @@ struct ASCTabContent<Content: View>: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 360)
-
-                if asc.app == nil {
-                    Text("Create your app in App Store Connect, then set the bundle ID in Settings \u{2192} Project.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 360)
-
-                    Link("Open App Store Connect",
-                         destination: URL(string: "https://appstoreconnect.apple.com/apps")!)
-                        .font(.callout)
-                }
 
                 Button("Retry") {
                     Task { await asc.refreshTabData(tab) }

@@ -84,10 +84,6 @@ public struct SimctlClient: Sendable {
         switch button.lowercased() {
         case "home":
             _ = try await ProcessRunner.run("xcrun", arguments: [
-                "simctl", "io", udid, "enumerate", // home button via status bar
-            ])
-            // Actually use keycode for home
-            _ = try await ProcessRunner.run("xcrun", arguments: [
                 "simctl", "io", udid, "sendkey", "home"
             ])
         case "lock", "side_button":

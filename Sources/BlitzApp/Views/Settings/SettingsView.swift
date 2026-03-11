@@ -5,57 +5,18 @@ struct SettingsView: View {
     var appState: AppState
     var mcpServer: MCPServerService?
 
-    @State private var bundleId: String = ""
-
-    private let gateableCategories: [(String, String)] = [
-        ("ascFormMutation", "ASC form editing"),
-        ("ascScreenshotMutation", "ASC screenshot upload"),
-        ("ascSubmitMutation", "ASC submit for review"),
-        ("projectMutation", "Project mutations"),
-        ("databaseMutation", "Database mutations"),
-        ("settingsMutation", "Settings mutations"),
-        ("simulatorControl", "Simulator control"),
-        ("recording", "Recording"),
+    private let gateableCategories: [(ApprovalRequest.ToolCategory, String)] = [
+        (.ascFormMutation, "ASC form editing"),
+        (.ascScreenshotMutation, "ASC screenshot upload"),
+        (.ascSubmitMutation, "ASC submit for review"),
+        (.projectMutation, "Project mutations"),
+        (.settingsMutation, "Settings mutations"),
+        (.simulatorControl, "Simulator control"),
+        (.recording, "Recording"),
     ]
 
     var body: some View {
         Form {
-            if let project = appState.activeProject {
-                Section("Project") {
-                    HStack {
-                        Text("Current Project")
-                        Spacer()
-                        Text(project.name)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    HStack {
-                        Text("Bundle ID")
-                        Spacer()
-                        TextField("com.example.app", text: $bundleId)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 260)
-                            .onSubmit { saveBundleId() }
-                    }
-
-                    HStack {
-                        Link("Find your bundle ID on App Store Connect",
-                             destination: URL(string: "https://appstoreconnect.apple.com/apps")!)
-                            .font(.callout)
-                        Spacer()
-                        Button("Save") { saveBundleId() }
-                            .buttonStyle(.bordered)
-                            .disabled(bundleId.trimmingCharacters(in: .whitespaces) == (project.metadata.bundleIdentifier ?? ""))
-                    }
-                }
-                .onAppear {
-                    bundleId = project.metadata.bundleIdentifier ?? ""
-                }
-                .onChange(of: appState.activeProjectId) {
-                    bundleId = appState.activeProject?.metadata.bundleIdentifier ?? ""
-                }
-            }
-
             Section("Simulator") {
                 Picker("Frame Rate", selection: $settings.simulatorFPS) {
                     Text("30 FPS").tag(30)
@@ -90,22 +51,22 @@ struct SettingsView: View {
 
                 Toggle("Approve all", isOn: Binding(
                     get: {
-                        gateableCategories.allSatisfy { settings.permissionToggles[$0.0] ?? true }
+                        gateableCategories.allSatisfy { settings.permissionToggles[$0.0.rawValue] ?? true }
                     },
                     set: { newValue in
                         for (category, _) in gateableCategories {
-                            settings.permissionToggles[category] = newValue
+                            settings.permissionToggles[category.rawValue] = newValue
                         }
                         settings.save()
                     }
                 ))
                 .fontWeight(.medium)
 
-                ForEach(gateableCategories, id: \.0) { category, label in
+                ForEach(gateableCategories, id: \.0.rawValue) { category, label in
                     Toggle(label, isOn: Binding(
-                        get: { settings.permissionToggles[category] ?? true },
+                        get: { settings.permissionToggles[category.rawValue] ?? true },
                         set: { newValue in
-                            settings.permissionToggles[category] = newValue
+                            settings.permissionToggles[category.rawValue] = newValue
                             settings.save()
                         }
                     ))
@@ -118,7 +79,7 @@ struct SettingsView: View {
                 HStack {
                     Text("Blitz")
                     Spacer()
-                    Text("1.0.0")
+                    Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -128,21 +89,4 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func saveBundleId() {
-        guard let projectId = appState.activeProjectId else { return }
-        let storage = ProjectStorage()
-        guard var metadata = storage.readMetadata(projectId: projectId) else { return }
-        let trimmed = bundleId.trimmingCharacters(in: .whitespaces)
-        metadata.bundleIdentifier = trimmed.isEmpty ? nil : trimmed
-        try? storage.writeMetadata(projectId: projectId, metadata: metadata)
-
-        // Reload projects so activeProject picks up the change
-        Task {
-            await appState.projectManager.loadProjects()
-            // Re-fetch app if ASC credentials are configured
-            if !trimmed.isEmpty, appState.ascManager.credentials != nil {
-                await appState.ascManager.fetchApp(bundleId: trimmed)
-            }
-        }
-    }
 }

@@ -1,10 +1,14 @@
 import Foundation
+import BlitzCore
+import os
 
 /// Reads/writes ~/.blitz/settings.json
+@MainActor
 @Observable
 final class SettingsService {
     /// Shared singleton for permission checks from non-UI code (e.g. ApprovalRequest)
     static let shared = SettingsService()
+    private static let logger = Logger(subsystem: "com.blitz.macos", category: "Settings")
 
     private let settingsURL: URL
 
@@ -21,8 +25,7 @@ final class SettingsService {
     var autoNavEnabled: Bool = true
 
     init() {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        self.settingsURL = home.appendingPathComponent(".blitz/settings.json")
+        self.settingsURL = BlitzPaths.settings
     }
 
     func load() {
@@ -59,6 +62,10 @@ final class SettingsService {
         // Ensure directory exists
         let dir = settingsURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try? data.write(to: settingsURL)
+        do {
+            try data.write(to: settingsURL)
+        } catch {
+            Self.logger.error("Failed to save settings: \(error.localizedDescription)")
+        }
     }
 }

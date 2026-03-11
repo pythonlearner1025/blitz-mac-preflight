@@ -6,7 +6,10 @@ public actor WDAClient {
     private let session: URLSession
 
     public init(host: String = "localhost", port: Int = 8100) {
-        self.baseURL = URL(string: "http://\(host):\(port)")!
+        guard let url = URL(string: "http://\(host):\(port)") else {
+            preconditionFailure("Invalid WDA host/port: \(host):\(port)")
+        }
+        self.baseURL = url
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 10
         self.session = URLSession(configuration: config)
@@ -118,7 +121,7 @@ public actor WDAClient {
 
     /// Health check
     public func healthCheck() async throws -> Bool {
-        let url = baseURL.appendingPathComponent("/status")
+        let url = baseURL.appendingPathComponent("status")
         let (_, response) = try await session.data(from: url)
         return (response as? HTTPURLResponse)?.statusCode == 200
     }
@@ -126,7 +129,8 @@ public actor WDAClient {
     // MARK: - HTTP Helpers
 
     private func get<T: Codable>(_ path: String) async throws -> T {
-        let url = baseURL.appendingPathComponent(path)
+        let cleanPath = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        let url = baseURL.appendingPathComponent(cleanPath)
         let (data, response) = try await session.data(from: url)
         guard let httpResponse = response as? HTTPURLResponse,
               200..<300 ~= httpResponse.statusCode else {
@@ -137,7 +141,8 @@ public actor WDAClient {
 
     @discardableResult
     private func post<T: Codable>(_ path: String, body: Data) async throws -> T {
-        let url = baseURL.appendingPathComponent(path)
+        let cleanPath = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        let url = baseURL.appendingPathComponent(cleanPath)
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.httpBody = body
@@ -151,7 +156,8 @@ public actor WDAClient {
     }
 
     private func post(_ path: String, body: Data, ignoreResponse: Bool) async throws {
-        let url = baseURL.appendingPathComponent(path)
+        let cleanPath = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        let url = baseURL.appendingPathComponent(cleanPath)
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.httpBody = body

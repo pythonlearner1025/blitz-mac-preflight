@@ -29,6 +29,18 @@ final class ASCManager {
     var betaFeedback: [String: [ASCBetaFeedback]] = [:]  // keyed by build.id
     var selectedBuildId: String?
 
+    // Monetization data
+    var inAppPurchases: [ASCInAppPurchase] = []
+    var subscriptionGroups: [ASCSubscriptionGroup] = []
+    var subscriptionsPerGroup: [String: [ASCSubscription]] = [:]  // groupId → subs
+    var appPricePoints: [ASCPricePoint] = []  // USA price tiers for the app
+
+    // Creation progress (survives tab switches)
+    var createProgress: Double = 0
+    var createProgressMessage: String = ""
+    var isCreating = false
+    private var createTask: Task<Void, Never>?
+
     // New data for submission flow
     var appInfo: ASCAppInfo?
     var appInfoLocalization: ASCAppInfoLocalization?
@@ -44,8 +56,8 @@ final class ASCManager {
     // App icon status (set externally; nil = not checked / missing)
     var appIconStatus: String?
 
-    // Pricing status (set after pricing check or setPriceFree success)
-    var pricingStatus: String?
+    // monetization status (set after monetization check or setPriceFree success)
+    var monetizationStatus: String?
 
     // Build pipeline progress (driven by MCPToolExecutor)
     enum BuildPipelinePhase: String {
@@ -85,7 +97,7 @@ final class ASCManager {
             .init(label: "Content Rights", value: app?.contentRightsDeclaration),
             .init(label: "Primary Category", value: appInfo?.primaryCategoryId),
             .init(label: "Age Rating", value: ageRatingDeclaration != nil ? "Configured" : nil),
-            .init(label: "Pricing", value: pricingStatus),
+            .init(label: "Pricing", value: monetizationStatus),
             .init(label: "Review Contact First Name", value: review?.attributes.contactFirstName),
             .init(label: "Review Contact Last Name", value: review?.attributes.contactLastName),
             .init(label: "Review Contact Email", value: review?.attributes.contactEmail),
@@ -194,6 +206,10 @@ final class ASCManager {
         betaLocalizations = []
         betaFeedback = [:]
         selectedBuildId = nil
+        inAppPurchases = []
+        subscriptionGroups = []
+        subscriptionsPerGroup = [:]
+        appPricePoints = []
         appInfo = nil
         appInfoLocalization = nil
         ageRatingDeclaration = nil
@@ -204,7 +220,7 @@ final class ASCManager {
         submissionError = nil
         writeError = nil
         appIconStatus = nil
-        pricingStatus = nil
+        monetizationStatus = nil
         isLoadingTab = [:]
         tabError = [:]
         loadedTabs = []
@@ -265,6 +281,13 @@ final class ASCManager {
         }
     }
 
+    /// Called after bundle ID setup completes and the app is confirmed in ASC.
+    /// Clears all tab errors and forces data to be re-fetched.
+    func resetTabState() {
+        tabError.removeAll()
+        loadedTabs.removeAll()
+    }
+
     func refreshTabData(_ tab: AppTab) async {
         guard let service else { return }
         guard credentials != nil else { return }
@@ -308,9 +331,9 @@ final class ASCManager {
             }
             builds = try await service.fetchBuilds(appId: appId)
 
-            // Check pricing status
+            // Check monetization status
             let hasPricing = await service.fetchPricingConfigured(appId: appId)
-            pricingStatus = hasPricing ? "Configured" : nil
+            monetizationStatus = hasPricing ? "Configured" : nil
 
         case .storeListing:
             let versions = try await service.fetchAppStoreVersions(appId: appId)
@@ -356,8 +379,15 @@ final class ASCManager {
             }
             builds = try await service.fetchBuilds(appId: appId)
 
-        case .pricing:
-            break  // Pricing is fetched on demand
+        case .monetization:
+            appPricePoints = try await service.fetchAppPricePoints(appId: appId)
+            inAppPurchases = try await service.fetchInAppPurchases(appId: appId)
+            subscriptionGroups = try await service.fetchSubscriptionGroups(appId: appId)
+            for group in subscriptionGroups {
+                subscriptionsPerGroup[group.id] = try await service.fetchSubscriptionsInGroup(groupId: group.id)
+            }
+            let hasPricing = await service.fetchPricingConfigured(appId: appId)
+            monetizationStatus = hasPricing ? "Configured" : nil
 
         case .analytics:
             break  // Sales reports use a separate reports API; handled in view
@@ -488,13 +518,345 @@ final class ASCManager {
         }
     }
 
+    func setAppPrice(pricePointId: String) async {
+        guard let service else { return }
+        guard let appId = app?.id else { return }
+        writeError = nil
+        do {
+            try await service.setAppPrice(appId: appId, pricePointId: pricePointId)
+            monetizationStatus = "Configured"
+        } catch {
+            writeError = error.localizedDescription
+        }
+    }
+
+    func setScheduledAppPrice(currentPricePointId: String, futurePricePointId: String, effectiveDate: String) async {
+        guard let service else { return }
+        guard let appId = app?.id else { return }
+        writeError = nil
+        do {
+            try await service.setScheduledAppPrice(
+                appId: appId,
+                currentPricePointId: currentPricePointId,
+                futurePricePointId: futurePricePointId,
+                effectiveDate: effectiveDate
+            )
+            monetizationStatus = "Configured"
+        } catch {
+            writeError = error.localizedDescription
+        }
+    }
+
+    func createIAP(name: String, productId: String, type: String, displayName: String, description: String?, price: String, screenshotPath: String? = nil) {
+        guard let service else { return }
+        guard let appId = app?.id else { return }
+        writeError = nil
+        isCreating = true
+        createProgress = 0
+        createProgressMessage = "Creating in-app purchase…"
+
+        createTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                createProgress = 0.05
+                let iap = try await service.createInAppPurchase(
+                    appId: appId, name: name, productId: productId, inAppPurchaseType: type
+                )
+
+                createProgressMessage = "Setting localization…"
+                createProgress = 0.15
+                try await service.localizeInAppPurchase(
+                    iapId: iap.id, locale: "en-US", name: displayName, description: description
+                )
+
+                createProgressMessage = "Setting availability…"
+                createProgress = 0.3
+                let territories = try await service.fetchAllTerritories()
+                try await service.createIAPAvailability(iapId: iap.id, territoryIds: territories)
+
+                createProgress = 0.5
+                if !price.isEmpty, let priceVal = Double(price), priceVal > 0 {
+                    createProgressMessage = "Setting price…"
+                    let points = try await service.fetchInAppPurchasePricePoints(iapId: iap.id)
+                    if let match = points.first(where: {
+                        guard let cp = $0.attributes.customerPrice, let cpVal = Double(cp) else { return false }
+                        return abs(cpVal - priceVal) < 0.001
+                    }) {
+                        try await service.setInAppPurchasePrice(iapId: iap.id, pricePointId: match.id)
+                    }
+                }
+
+                createProgress = 0.7
+                if let path = screenshotPath {
+                    createProgressMessage = "Uploading screenshot…"
+                    try await service.uploadIAPReviewScreenshot(iapId: iap.id, path: path)
+                }
+
+                createProgressMessage = "Finalizing…"
+                createProgress = 0.9
+                try await Task.sleep(for: .seconds(2))
+                inAppPurchases = try await service.fetchInAppPurchases(appId: appId)
+                createProgress = 1.0
+            } catch {
+                writeError = error.localizedDescription
+            }
+            isCreating = false
+            createProgress = 0
+            createProgressMessage = ""
+        }
+    }
+
+    func updateIAP(id: String, name: String?, reviewNote: String?, displayName: String?, description: String?) async {
+        guard let service else { return }
+        guard let appId = app?.id else { return }
+        writeError = nil
+        do {
+            // Patch IAP attributes (name, reviewNote)
+            var attrs: [String: Any] = [:]
+            if let name { attrs["name"] = name }
+            if let reviewNote { attrs["reviewNote"] = reviewNote }
+            if !attrs.isEmpty {
+                try await service.patchInAppPurchase(iapId: id, attrs: attrs)
+            }
+            // Patch localization (displayName, description)
+            if displayName != nil || description != nil {
+                let locs = try await service.fetchIAPLocalizations(iapId: id)
+                if let loc = locs.first {
+                    var fields: [String: String] = [:]
+                    if let displayName { fields["name"] = displayName }
+                    if let description { fields["description"] = description }
+                    try await service.patchIAPLocalization(locId: loc.id, fields: fields)
+                }
+            }
+            inAppPurchases = try await service.fetchInAppPurchases(appId: appId)
+        } catch {
+            writeError = error.localizedDescription
+        }
+    }
+
+    func uploadIAPScreenshot(iapId: String, path: String) async {
+        guard let service else { return }
+        writeError = nil
+        do {
+            try await service.uploadIAPReviewScreenshot(iapId: iapId, path: path)
+        } catch {
+            writeError = error.localizedDescription
+        }
+    }
+
+    func deleteIAP(id: String) async {
+        guard let service else { return }
+        guard let appId = app?.id else { return }
+        writeError = nil
+        do {
+            try await service.deleteInAppPurchase(iapId: id)
+            inAppPurchases = try await service.fetchInAppPurchases(appId: appId)
+        } catch {
+            writeError = error.localizedDescription
+        }
+    }
+
+    func createSubscription(groupName: String, name: String, productId: String, displayName: String, description: String?, duration: String, price: String, screenshotPath: String? = nil) {
+        guard let service else { return }
+        guard let appId = app?.id else { return }
+        writeError = nil
+        isCreating = true
+        createProgress = 0
+        createProgressMessage = "Setting up group…"
+
+        createTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                createProgress = 0.03
+                let group: ASCSubscriptionGroup
+                if let existing = subscriptionGroups.first(where: { $0.attributes.referenceName == groupName }) {
+                    let groupLocs = try await service.fetchSubscriptionGroupLocalizations(groupId: existing.id)
+                    if groupLocs.isEmpty {
+                        try await service.localizeSubscriptionGroup(groupId: existing.id, locale: "en-US", name: groupName)
+                    }
+                    group = existing
+                } else {
+                    group = try await service.createSubscriptionGroup(appId: appId, referenceName: groupName)
+                    try await service.localizeSubscriptionGroup(groupId: group.id, locale: "en-US", name: groupName)
+                }
+
+                createProgressMessage = "Creating subscription…"
+                createProgress = 0.08
+                let sub = try await service.createSubscription(
+                    groupId: group.id, name: name, productId: productId, subscriptionPeriod: duration
+                )
+
+                createProgressMessage = "Setting localization…"
+                createProgress = 0.12
+                try await service.localizeSubscription(
+                    subscriptionId: sub.id, locale: "en-US", name: displayName, description: description
+                )
+
+                createProgressMessage = "Setting availability…"
+                createProgress = 0.16
+                let territories = try await service.fetchAllTerritories()
+                try await service.createSubscriptionAvailability(subscriptionId: sub.id, territoryIds: territories)
+
+                createProgress = 0.2
+                if !price.isEmpty, let priceVal = Double(price), priceVal > 0 {
+                    let points = try await service.fetchSubscriptionPricePoints(subscriptionId: sub.id)
+                    if let match = points.first(where: {
+                        guard let cp = $0.attributes.customerPrice, let cpVal = Double(cp) else { return false }
+                        return abs(cpVal - priceVal) < 0.001
+                    }) {
+                        // Pricing loop: 0.2 → 0.8 (bulk of the time)
+                        createProgressMessage = "Setting prices (0/175)…"
+                        try await service.setSubscriptionPrice(subscriptionId: sub.id, pricePointId: match.id) { done, total in
+                            Task { @MainActor [weak self] in
+                                self?.createProgressMessage = "Setting prices (\(done)/\(total))…"
+                                self?.createProgress = 0.2 + 0.6 * (Double(done) / Double(total))
+                            }
+                        }
+                    }
+                }
+
+                createProgress = 0.85
+                if let path = screenshotPath {
+                    createProgressMessage = "Uploading screenshot…"
+                    try await service.uploadSubscriptionReviewScreenshot(subscriptionId: sub.id, path: path)
+                }
+
+                createProgressMessage = "Finalizing…"
+                createProgress = 0.93
+                try await Task.sleep(for: .seconds(2))
+                subscriptionGroups = try await service.fetchSubscriptionGroups(appId: appId)
+                for g in subscriptionGroups {
+                    subscriptionsPerGroup[g.id] = try await service.fetchSubscriptionsInGroup(groupId: g.id)
+                }
+                createProgress = 1.0
+            } catch {
+                writeError = error.localizedDescription
+            }
+            isCreating = false
+            createProgress = 0
+            createProgressMessage = ""
+        }
+    }
+
+    func updateSubscription(id: String, name: String?, reviewNote: String?, displayName: String?, description: String?) async {
+        guard let service else { return }
+        guard let appId = app?.id else { return }
+        writeError = nil
+        do {
+            var attrs: [String: Any] = [:]
+            if let name { attrs["name"] = name }
+            if let reviewNote { attrs["reviewNote"] = reviewNote }
+            if !attrs.isEmpty {
+                try await service.patchSubscription(subscriptionId: id, attrs: attrs)
+            }
+            if displayName != nil || description != nil {
+                let locs = try await service.fetchSubscriptionLocalizations(subscriptionId: id)
+                if let loc = locs.first {
+                    var fields: [String: String] = [:]
+                    if let displayName { fields["name"] = displayName }
+                    if let description { fields["description"] = description }
+                    try await service.patchSubscriptionLocalization(locId: loc.id, fields: fields)
+                }
+            }
+            subscriptionGroups = try await service.fetchSubscriptionGroups(appId: appId)
+            for g in subscriptionGroups {
+                subscriptionsPerGroup[g.id] = try await service.fetchSubscriptionsInGroup(groupId: g.id)
+            }
+        } catch {
+            writeError = error.localizedDescription
+        }
+    }
+
+    func uploadSubscriptionScreenshot(subscriptionId: String, path: String) async {
+        guard let service else { return }
+        writeError = nil
+        do {
+            try await service.uploadSubscriptionReviewScreenshot(subscriptionId: subscriptionId, path: path)
+        } catch {
+            writeError = error.localizedDescription
+        }
+    }
+
+    func updateSubscriptionGroupLocalization(groupId: String, name: String) async {
+        guard let service else { return }
+        writeError = nil
+        do {
+            let locs = try await service.fetchSubscriptionGroupLocalizations(groupId: groupId)
+            if let loc = locs.first {
+                try await service.patchSubscriptionGroupLocalization(locId: loc.id, name: name)
+            } else {
+                try await service.localizeSubscriptionGroup(groupId: groupId, locale: "en-US", name: name)
+            }
+        } catch {
+            writeError = error.localizedDescription
+        }
+    }
+
+    func deleteSubscription(id: String) async {
+        guard let service else { return }
+        guard let appId = app?.id else { return }
+        writeError = nil
+        do {
+            try await service.deleteSubscription(subscriptionId: id)
+            subscriptionGroups = try await service.fetchSubscriptionGroups(appId: appId)
+            for g in subscriptionGroups {
+                subscriptionsPerGroup[g.id] = try await service.fetchSubscriptionsInGroup(groupId: g.id)
+            }
+        } catch {
+            writeError = error.localizedDescription
+        }
+    }
+
+    // MARK: - Review Submissions
+
+    func submitIAPForReview(id: String) async {
+        guard let service else { return }
+        guard let appId = app?.id else { return }
+        writeError = nil
+        do {
+            try await service.submitIAPForReview(iapId: id)
+            inAppPurchases = try await service.fetchInAppPurchases(appId: appId)
+        } catch {
+            writeError = error.localizedDescription
+        }
+    }
+
+    func submitSubscriptionForReview(id: String) async {
+        guard let service else { return }
+        guard let appId = app?.id else { return }
+        writeError = nil
+        do {
+            try await service.submitSubscriptionForReview(subscriptionId: id)
+            subscriptionGroups = try await service.fetchSubscriptionGroups(appId: appId)
+            for g in subscriptionGroups {
+                subscriptionsPerGroup[g.id] = try await service.fetchSubscriptionsInGroup(groupId: g.id)
+            }
+        } catch {
+            writeError = error.localizedDescription
+        }
+    }
+
+    func refreshMonetization() async {
+        guard let service else { return }
+        guard let appId = app?.id else { return }
+        do {
+            inAppPurchases = try await service.fetchInAppPurchases(appId: appId)
+            subscriptionGroups = try await service.fetchSubscriptionGroups(appId: appId)
+            for group in subscriptionGroups {
+                subscriptionsPerGroup[group.id] = try await service.fetchSubscriptionsInGroup(groupId: group.id)
+            }
+        } catch {
+            writeError = error.localizedDescription
+        }
+    }
+
     func setPriceFree() async {
         guard let service else { return }
         guard let appId = app?.id else { return }
         writeError = nil
         do {
             try await service.setPriceFree(appId: appId)
-            pricingStatus = "Free"
+            monetizationStatus = "Free"
         } catch {
             writeError = error.localizedDescription
         }

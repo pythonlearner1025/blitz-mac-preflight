@@ -41,6 +41,15 @@ struct ASCListResponse<T: Decodable>: Decodable {
     let data: [T]
 }
 
+struct ASCPaginatedResponse<T: Decodable>: Decodable {
+    let data: [T]
+    let links: Links?
+
+    struct Links: Decodable {
+        let next: String?
+    }
+}
+
 // MARK: - App
 
 struct ASCApp: Decodable, Identifiable {
@@ -345,6 +354,79 @@ struct SubmissionReadiness {
     }
 }
 
+// MARK: - InAppPurchase
+
+struct ASCInAppPurchase: Decodable, Identifiable {
+    let id: String
+    struct Attributes: Decodable {
+        let name: String?
+        let productId: String?
+        let inAppPurchaseType: String?
+        let state: String?
+        let reviewNote: String?
+    }
+    let attributes: Attributes
+}
+
+// MARK: - SubscriptionGroup
+
+struct ASCSubscriptionGroup: Decodable, Identifiable {
+    let id: String
+    struct Attributes: Decodable {
+        let referenceName: String?
+    }
+    let attributes: Attributes
+}
+
+// MARK: - Subscription
+
+struct ASCSubscription: Decodable, Identifiable {
+    let id: String
+    struct Attributes: Decodable {
+        let name: String?
+        let productId: String?
+        let subscriptionPeriod: String?
+        let state: String?
+        let reviewNote: String?
+    }
+    let attributes: Attributes
+}
+
+// MARK: - InAppPurchaseLocalization
+
+struct ASCIAPLocalization: Decodable, Identifiable {
+    let id: String
+    struct Attributes: Decodable {
+        let locale: String?
+        let name: String?
+        let description: String?
+    }
+    let attributes: Attributes
+}
+
+// MARK: - SubscriptionLocalization
+
+struct ASCSubscriptionLocalization: Decodable, Identifiable {
+    let id: String
+    struct Attributes: Decodable {
+        let locale: String?
+        let name: String?
+        let description: String?
+    }
+    let attributes: Attributes
+}
+
+// MARK: - SubscriptionGroupLocalization
+
+struct ASCSubscriptionGroupLocalization: Decodable, Identifiable {
+    let id: String
+    struct Attributes: Decodable {
+        let locale: String?
+        let name: String?
+    }
+    let attributes: Attributes
+}
+
 // MARK: - PriceSchedule (for pricing check)
 
 struct ASCPriceSchedule: Decodable, Identifiable {
@@ -352,6 +434,12 @@ struct ASCPriceSchedule: Decodable, Identifiable {
 }
 
 struct ASCPriceScheduleEntry: Decodable, Identifiable {
+    let id: String
+}
+
+// MARK: - Territory
+
+struct ASCTerritory: Decodable, Identifiable {
     let id: String
 }
 

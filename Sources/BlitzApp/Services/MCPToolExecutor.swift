@@ -22,12 +22,10 @@ private func withThrowingTimeout<T: Sendable>(seconds: TimeInterval, operation: 
 /// Holds pending approval continuations for destructive operations.
 actor MCPToolExecutor {
     private let appState: AppState
-    private let deviceInteraction: DeviceInteractionService
     private var pendingContinuations: [String: CheckedContinuation<Bool, Never>] = [:]
 
-    init(appState: AppState, deviceInteraction: DeviceInteractionService) {
+    init(appState: AppState) {
         self.appState = appState
-        self.deviceInteraction = deviceInteraction
     }
 
     /// Execute a tool call, requesting approval if needed
@@ -36,19 +34,20 @@ actor MCPToolExecutor {
 
         // Pre-navigate for ASC form tools so the user sees the target tab before approving
         var previousTab: AppTab?
-        if name == "asc_fill_form" || name == "asc_upload_screenshots" || name == "asc_open_submit_preview" {
+        if name == "asc_fill_form" || name == "asc_upload_screenshots" || name == "asc_open_submit_preview"
+            || name == "asc_create_iap" || name == "asc_create_subscription" || name == "asc_set_app_price" {
             previousTab = await preNavigateASCTool(name: name, arguments: arguments)
         }
 
         let request = ApprovalRequest(
             id: UUID().uuidString,
             toolName: name,
-            description: humanDescription(tool: name, args: arguments),
+            description: "Execute '\(name)'",
             parameters: arguments.mapValues { "\($0)" },
             category: category
         )
 
-        if request.requiresApproval {
+        if request.requiresApproval(permissionToggles: await SettingsService.shared.permissionToggles) {
             let approved = await requestApproval(request)
             guard approved else {
                 // Navigate back if denied
@@ -74,7 +73,7 @@ actor MCPToolExecutor {
             switch tab {
             case "storeListing": targetTab = .storeListing
             case "appDetails": targetTab = .appDetails
-            case "pricing": targetTab = .pricing
+            case "monetization": targetTab = .monetization
             case "review.ageRating", "review.contact": targetTab = .review
             case "settings.bundleId": targetTab = .settings
             default: targetTab = nil
@@ -83,6 +82,10 @@ actor MCPToolExecutor {
             targetTab = .ascOverview
         } else if name == "asc_upload_screenshots" {
             targetTab = .screenshots
+        } else if name == "asc_set_app_price" {
+            targetTab = .monetization
+        } else if name == "asc_create_iap" || name == "asc_create_subscription" {
+            targetTab = .monetization
         } else {
             targetTab = nil
         }
@@ -189,34 +192,6 @@ actor MCPToolExecutor {
             return await executeSimulatorListDevices()
         case "simulator_select_device":
             return try await executeSimulatorSelectDevice(arguments)
-        case "simulator_start_streaming":
-            return await executeSimulatorStartStreaming()
-        case "simulator_stop_streaming":
-            return await executeSimulatorStopStreaming()
-        case "simulator_press_home":
-            return try await executeSimulatorPressHome(arguments)
-        case "simulator_send_text":
-            return try await executeSimulatorSendText(arguments)
-        case "simulator_toggle_keyboard":
-            return await executeSimulatorToggleKeyboard()
-
-        // -- Database --
-        case "db_connect":
-            return await executeDbConnect()
-        case "db_disconnect":
-            return await executeDbDisconnect()
-        case "db_list_tables":
-            return await executeDbListTables()
-        case "db_select_table":
-            return try await executeDbSelectTable(arguments)
-        case "db_query_rows":
-            return try await executeDbQueryRows(arguments)
-        case "db_insert_record":
-            return try await executeDbInsertRecord(arguments)
-        case "db_update_record":
-            return try await executeDbUpdateRecord(arguments)
-        case "db_delete_record":
-            return try await executeDbDeleteRecord(arguments)
 
         // -- Settings --
         case "settings_get":
@@ -243,6 +218,12 @@ actor MCPToolExecutor {
             return try await executeASCUploadScreenshots(arguments)
         case "asc_open_submit_preview":
             return await executeASCOpenSubmitPreview()
+        case "asc_create_iap":
+            return try await executeASCCreateIAP(arguments)
+        case "asc_create_subscription":
+            return try await executeASCCreateSubscription(arguments)
+        case "asc_set_app_price":
+            return try await executeASCSetAppPrice(arguments)
 
         // -- Build Pipeline --
         case "app_store_setup_signing":
@@ -251,62 +232,6 @@ actor MCPToolExecutor {
             return try await executeBuildIPA(arguments)
         case "app_store_upload":
             return try await executeUploadToTestFlight(arguments)
-
-        // -- Device interaction (existing tools) --
-        case "describe_screen":
-            let fallbackUdid = await MainActor.run { appState.simulatorManager.bootedDeviceId }
-            let udid = arguments["udid"] as? String ?? fallbackUdid ?? "booted"
-            let result = try await deviceInteraction.execute(.describeAll(), udid: udid)
-            return mcpText(result ?? "")
-
-        case "device_action":
-            guard let actionStr = arguments["action"] as? String,
-                  let params = arguments["params"] as? [String: Any] else {
-                throw MCPServerService.MCPError.invalidToolArgs
-            }
-            let action = try parseDeviceAction(actionStr, params: params)
-            let fallbackUdid = await MainActor.run { appState.simulatorManager.bootedDeviceId }
-            let udid = arguments["udid"] as? String ?? fallbackUdid ?? "booted"
-            let result = try await deviceInteraction.execute(action, udid: udid)
-            return mcpText(result ?? "Action executed")
-
-        case "device_actions":
-            guard let actions = arguments["actions"] as? [[String: Any]] else {
-                throw MCPServerService.MCPError.invalidToolArgs
-            }
-            let fallbackUdid = await MainActor.run { appState.simulatorManager.bootedDeviceId }
-            let udid = arguments["udid"] as? String ?? fallbackUdid ?? "booted"
-            var results: [String] = []
-            for actionDict in actions {
-                guard let actionStr = actionDict["action"] as? String,
-                      let params = actionDict["params"] as? [String: Any] else { continue }
-                let action = try parseDeviceAction(actionStr, params: params)
-                let result = try await deviceInteraction.execute(action, udid: udid)
-                results.append(result ?? "OK")
-            }
-            return mcpText(results.joined(separator: "\n"))
-
-        case "get_simulator_screenshot":
-            let fallbackUdid = await MainActor.run { appState.simulatorManager.bootedDeviceId }
-            let udid = arguments["udid"] as? String ?? fallbackUdid ?? "booted"
-            let path = "/tmp/blitz-sim-screenshot-\(Int(Date().timeIntervalSince1970)).png"
-            try await SimctlClient().screenshot(udid: udid, path: path)
-            return mcpText(path)
-
-        case "get_device_screenshot":
-            let port = arguments["port"] as? Int ?? 8100
-            let wda = WDAClient(port: port)
-            // Try to reuse an existing session, or create a new one
-            let sessionId: String
-            if let sid = arguments["sessionId"] as? String {
-                sessionId = sid
-            } else {
-                sessionId = try await wda.createSession()
-            }
-            let pngData = try await wda.screenshot(sessionId: sessionId)
-            let path = "/tmp/blitz-device-screenshot-\(Int(Date().timeIntervalSince1970)).png"
-            try pngData.write(to: URL(fileURLWithPath: path))
-            return mcpText(path)
 
         case "get_blitz_screenshot":
             let path = "/tmp/blitz-app-screenshot-\(Int(Date().timeIntervalSince1970)).png"
@@ -335,12 +260,6 @@ actor MCPToolExecutor {
                 return mcpText("Error: could not capture Blitz window screenshot")
             }
 
-        case "scan_ui":
-            let fallbackUdid = await MainActor.run { appState.simulatorManager.bootedDeviceId }
-            let udid = arguments["udid"] as? String ?? fallbackUdid ?? "booted"
-            let result = try await deviceInteraction.execute(.describeAll(), udid: udid)
-            return mcpText(result ?? "")
-
         default:
             throw MCPServerService.MCPError.unknownTool(name)
         }
@@ -365,6 +284,14 @@ actor MCPToolExecutor {
             }
             if let udid = appState.simulatorManager.bootedDeviceId {
                 result["bootedSimulator"] = udid
+            }
+            // Expose Teenybase DB URL so AI agents can curl it directly
+            let db = appState.databaseManager
+            if db.connectionStatus == .connected || db.backendProcess.isRunning {
+                result["database"] = [
+                    "url": db.backendProcess.baseURL,
+                    "status": db.connectionStatus == .connected ? "connected" : "running"
+                ]
             }
             return result
         }
@@ -549,201 +476,6 @@ actor MCPToolExecutor {
         return mcpText("Booted simulator: \(udid)")
     }
 
-    private func executeSimulatorStartStreaming() async -> [String: Any] {
-        let fps = await MainActor.run { appState.settingsStore.simulatorFPS }
-        let udid = await MainActor.run { appState.simulatorManager.bootedDeviceId }
-        await appState.simulatorStream.startStreaming(bootedDeviceId: udid, fps: fps)
-        return mcpText("Streaming started")
-    }
-
-    private func executeSimulatorStopStreaming() async -> [String: Any] {
-        await appState.simulatorStream.stopStreaming()
-        return mcpText("Streaming stopped")
-    }
-
-    private func executeSimulatorPressHome(_ args: [String: Any]) async throws -> [String: Any] {
-        let fallbackUdid = await MainActor.run { appState.simulatorManager.bootedDeviceId }
-        let udid = args["udid"] as? String ?? fallbackUdid ?? ""
-        _ = try await deviceInteraction.execute(.button(.home), udid: udid)
-        return mcpText("Home button pressed")
-    }
-
-    private func executeSimulatorSendText(_ args: [String: Any]) async throws -> [String: Any] {
-        guard let text = args["text"] as? String else {
-            throw MCPServerService.MCPError.invalidToolArgs
-        }
-        let fallbackUdid = await MainActor.run { appState.simulatorManager.bootedDeviceId }
-        let udid = args["udid"] as? String ?? fallbackUdid ?? ""
-        _ = try await deviceInteraction.execute(.inputText(text), udid: udid)
-        return mcpText("Text sent: \(text)")
-    }
-
-    private func executeSimulatorToggleKeyboard() async -> [String: Any] {
-        await MainActor.run {
-            appState.simulatorStream.showTextInput.toggle()
-        }
-        return mcpText("Keyboard toggled")
-    }
-
-    // MARK: - Database Tools
-
-    private func executeDbConnect() async -> [String: Any] {
-        guard let project = await MainActor.run(body: { appState.activeProject }) else {
-            return mcpText("No active project")
-        }
-        await appState.databaseManager.startAndConnect(projectId: project.id, projectPath: project.path)
-        let status = await MainActor.run { appState.databaseManager.connectionStatus }
-        return mcpText("Database connection status: \(status)")
-    }
-
-    private func executeDbDisconnect() async -> [String: Any] {
-        await MainActor.run { appState.databaseManager.disconnect() }
-        return mcpText("Database disconnected")
-    }
-
-    private func executeDbListTables() async -> [String: Any] {
-        let tables = await MainActor.run {
-            appState.databaseManager.schema?.tables.map { t -> [String: Any] in
-                [
-                    "name": t.name,
-                    "fields": t.fields.map { ["name": $0.name, "type": $0.type ?? "text"] }
-                ]
-            } ?? []
-        }
-        return mcpJSON(["tables": tables])
-    }
-
-    private func executeDbSelectTable(_ args: [String: Any]) async throws -> [String: Any] {
-        guard let tableName = args["table"] as? String else {
-            throw MCPServerService.MCPError.invalidToolArgs
-        }
-        let found = await MainActor.run { () -> Bool in
-            guard let table = appState.databaseManager.schema?.tables.first(where: { $0.name == tableName }) else {
-                return false
-            }
-            appState.databaseManager.selectedTable = table
-            return true
-        }
-        return mcpText(found ? "Selected table: \(tableName)" : "Table not found: \(tableName)")
-    }
-
-    private func executeDbQueryRows(_ args: [String: Any]) async throws -> [String: Any] {
-        if let tableName = args["table"] as? String {
-            _ = try await executeDbSelectTable(["table": tableName])
-        }
-        if let search = args["search"] as? String {
-            await MainActor.run { appState.databaseManager.searchText = search }
-        }
-        if let orderBy = args["orderBy"] as? String {
-            await MainActor.run { appState.databaseManager.sortField = orderBy }
-        }
-        if let ascending = args["ascending"] as? Bool {
-            await MainActor.run { appState.databaseManager.sortAscending = ascending }
-        }
-        if let limit = args["limit"] as? Int {
-            await MainActor.run { appState.databaseManager.pageSize = limit }
-        }
-        if let offset = args["offset"] as? Int {
-            let pageSize = await MainActor.run { appState.databaseManager.pageSize }
-            await MainActor.run { appState.databaseManager.currentPage = offset / max(pageSize, 1) }
-        }
-
-        await appState.databaseManager.loadRows()
-
-        let result = await MainActor.run { () -> [String: Any] in
-            let jsonRows: [[String: Any]] = appState.databaseManager.rows.map { row in
-                row.mapValues { value -> Any in
-                    switch value {
-                    case .string(let v): return v
-                    case .int(let v): return v
-                    case .double(let v): return v
-                    case .bool(let v): return v
-                    case .null: return NSNull()
-                    }
-                }
-            }
-            return [
-                "rows": jsonRows,
-                "total": appState.databaseManager.totalRows,
-                "page": appState.databaseManager.currentPage,
-                "pageSize": appState.databaseManager.pageSize
-            ]
-        }
-        return mcpJSON(result)
-    }
-
-    private func executeDbInsertRecord(_ args: [String: Any]) async throws -> [String: Any] {
-        guard let values = args["values"] as? [String: Any] else {
-            throw MCPServerService.MCPError.invalidToolArgs
-        }
-        let status = await MainActor.run { appState.databaseManager.connectionStatus }
-        guard status == .connected else {
-            return mcpText("Error: database is not connected. Call db_connect first.")
-        }
-        if let tableName = args["table"] as? String {
-            _ = try await executeDbSelectTable(["table": tableName])
-        }
-        let tableName = await MainActor.run { appState.databaseManager.selectedTable?.name }
-        guard let tableName else {
-            return mcpText("Error: no table selected. Provide a 'table' parameter or call db_select_table first.")
-        }
-        do {
-            _ = try await appState.databaseManager.client.insertRecord(table: tableName, values: values)
-            await appState.databaseManager.loadRows()
-            return mcpText("Record inserted")
-        } catch {
-            return mcpText("Error inserting record: \(error.localizedDescription)")
-        }
-    }
-
-    private func executeDbUpdateRecord(_ args: [String: Any]) async throws -> [String: Any] {
-        guard let id = args["id"] as? String,
-              let values = args["values"] as? [String: Any] else {
-            throw MCPServerService.MCPError.invalidToolArgs
-        }
-        let status = await MainActor.run { appState.databaseManager.connectionStatus }
-        guard status == .connected else {
-            return mcpText("Error: database is not connected. Call db_connect first.")
-        }
-        if let tableName = args["table"] as? String {
-            _ = try await executeDbSelectTable(["table": tableName])
-        }
-        let tableName = await MainActor.run { appState.databaseManager.selectedTable?.name }
-        guard let tableName else {
-            return mcpText("Error: no table selected. Provide a 'table' parameter or call db_select_table first.")
-        }
-        do {
-            _ = try await appState.databaseManager.client.updateRecord(table: tableName, id: id, values: values)
-            await appState.databaseManager.loadRows()
-            return mcpText("Record updated")
-        } catch {
-            return mcpText("Error updating record: \(error.localizedDescription)")
-        }
-    }
-
-    private func executeDbDeleteRecord(_ args: [String: Any]) async throws -> [String: Any] {
-        guard let id = args["id"] as? String else {
-            throw MCPServerService.MCPError.invalidToolArgs
-        }
-        let status = await MainActor.run { appState.databaseManager.connectionStatus }
-        guard status == .connected else {
-            return mcpText("Error: database is not connected. Call db_connect first.")
-        }
-        if let tableName = args["table"] as? String {
-            _ = try await executeDbSelectTable(["table": tableName])
-        }
-        let tableName = await MainActor.run { appState.databaseManager.selectedTable?.name }
-        guard let tableName else {
-            return mcpText("Error: no table selected. Provide a 'table' parameter or call db_select_table first.")
-        }
-        do {
-            _ = try await appState.databaseManager.client.deleteRecord(table: tableName, id: id)
-            await appState.databaseManager.loadRows()
-            return mcpText("Record deleted")
-        } catch {
-            return mcpText("Error deleting record: \(error.localizedDescription)")
-        }
-    }
 
     // MARK: - Settings Tools
 
@@ -794,7 +526,7 @@ actor MCPToolExecutor {
         "storeListing": ["title", "name", "subtitle", "description", "keywords", "promotionalText",
                          "marketingUrl", "supportUrl", "whatsNew", "privacyPolicyUrl"],
         "appDetails": ["copyright", "primaryCategory", "contentRightsDeclaration"],
-        "pricing": ["isFree"],
+        "monetization": ["isFree"],
         "review.ageRating": ["gambling", "messagingAndChat", "unrestrictedWebAccess",
                              "userGeneratedContent", "advertising", "lootBox",
                              "healthOrWellnessTopics", "parentalControls", "ageAssurance",
@@ -877,11 +609,7 @@ actor MCPToolExecutor {
                 for (field, value) in infoLocFields {
                     await appState.ascManager.updateAppInfoLocalizationField(field, value: value)
                 }
-                // Check if any write failed
-                if let error = await MainActor.run(body: { appState.ascManager.writeError }) {
-                    _ = await MainActor.run { appState.ascManager.pendingFormValues.removeValue(forKey: tab) }
-                    return mcpText("Error updating store listing: \(error)")
-                }
+                if let err = await checkASCWriteError(tab: tab) { return err }
             }
 
             // Save version localization fields (description, keywords, etc.)
@@ -900,7 +628,7 @@ actor MCPToolExecutor {
                     }
                 } catch {
                     _ = await MainActor.run { appState.ascManager.pendingFormValues.removeValue(forKey: tab) }
-                    return mcpText("Error updating store listing: \(error.localizedDescription)")
+                    return mcpText("Error: \(error.localizedDescription)")
                 }
             }
 
@@ -908,24 +636,19 @@ actor MCPToolExecutor {
             for (field, value) in fieldMap {
                 await appState.ascManager.updateAppInfoField(field, value: value)
             }
-            if let error = await MainActor.run(body: { appState.ascManager.writeError }) {
-                _ = await MainActor.run { appState.ascManager.pendingFormValues.removeValue(forKey: tab) }
-                return mcpText("Error updating app details: \(error)")
-            }
+            if let err = await checkASCWriteError(tab: tab) { return err }
 
-        case "pricing":
+        case "monetization":
             guard let isFree = fieldMap["isFree"] else {
-                return mcpText("Error: pricing tab requires the 'isFree' field (value: \"true\" or \"false\").")
+                return mcpText("Error: monetization tab requires the 'isFree' field (value: \"true\" or \"false\").")
             }
             if isFree == "true" {
                 await appState.ascManager.setPriceFree()
             } else {
-                return mcpText("Error: only free pricing is supported via MCP. Set paid pricing manually in App Store Connect.")
+                // Paid pricing — use asc_set_app_price tool instead
+                return mcpText("To set a paid price, use the asc_set_app_price tool with a price parameter (e.g. price=\"0.99\").")
             }
-            if let error = await MainActor.run(body: { appState.ascManager.writeError }) {
-                _ = await MainActor.run { appState.ascManager.pendingFormValues.removeValue(forKey: tab) }
-                return mcpText("Error updating pricing: \(error)")
-            }
+            if let err = await checkASCWriteError(tab: tab) { return err }
 
         case "review.ageRating":
             var attrs: [String: Any] = [:]
@@ -940,10 +663,7 @@ actor MCPToolExecutor {
                 }
             }
             await appState.ascManager.updateAgeRating(attrs)
-            if let error = await MainActor.run(body: { appState.ascManager.writeError }) {
-                _ = await MainActor.run { appState.ascManager.pendingFormValues.removeValue(forKey: tab) }
-                return mcpText("Error updating age rating: \(error)")
-            }
+            if let err = await checkASCWriteError(tab: tab) { return err }
 
         case "review.contact":
             var attrs: [String: Any] = [:]
@@ -955,10 +675,7 @@ actor MCPToolExecutor {
                 }
             }
             await appState.ascManager.updateReviewContact(attrs)
-            if let error = await MainActor.run(body: { appState.ascManager.writeError }) {
-                _ = await MainActor.run { appState.ascManager.pendingFormValues.removeValue(forKey: tab) }
-                return mcpText("Error updating review contact: \(error)")
-            }
+            if let err = await checkASCWriteError(tab: tab) { return err }
 
         case "settings.bundleId":
             if let bundleId = fieldMap["bundleId"] {
@@ -1009,9 +726,7 @@ actor MCPToolExecutor {
 
         await appState.ascManager.uploadScreenshots(paths: paths, displayType: displayType, locale: locale)
 
-        if let error = await MainActor.run(body: { appState.ascManager.writeError }) {
-            return mcpText("Error uploading screenshots: \(error)")
-        }
+        if let err = await checkASCWriteError(tab: "screenshots") { return err }
         return mcpJSON(["success": true, "uploaded": paths.count])
     }
 
@@ -1063,6 +778,190 @@ actor MCPToolExecutor {
         return mcpJSON(["ready": true, "opened": true])
     }
 
+    // MARK: - ASC IAP / Subscriptions / Pricing Tools
+
+    /// Fuzzy price match: "0.99" matches "0.990", "0.99", etc.
+    private static func priceMatches(_ customerPrice: String?, target: String) -> Bool {
+        guard let customerPrice else { return false }
+        guard let a = Double(customerPrice), let b = Double(target) else {
+            return customerPrice == target
+        }
+        return abs(a - b) < 0.001
+    }
+
+    private func executeASCSetAppPrice(_ args: [String: Any]) async throws -> [String: Any] {
+        guard let priceStr = args["price"] as? String else {
+            throw MCPServerService.MCPError.invalidToolArgs
+        }
+        let effectiveDate = args["effectiveDate"] as? String  // optional: ISO date like "2026-06-01"
+
+        guard let service = await MainActor.run(body: { appState.ascManager.service }) else {
+            return mcpText("Error: ASC service not configured")
+        }
+        guard let appId = await MainActor.run(body: { appState.ascManager.app?.id }) else {
+            return mcpText("Error: no ASC app loaded. Open a project with a bundle ID first.")
+        }
+
+        // If price is "0" or "0.00", use the existing setPriceFree method
+        if let priceVal = Double(priceStr), priceVal < 0.001 {
+            try await service.setPriceFree(appId: appId)
+            return mcpJSON(["success": true, "price": "0.00", "message": "App set to free"])
+        }
+
+        // Fetch price points and find matching one
+        let pricePoints = try await service.fetchAppPricePoints(appId: appId)
+        guard let match = pricePoints.first(where: { Self.priceMatches($0.attributes.customerPrice, target: priceStr) }) else {
+            let available = pricePoints.compactMap { $0.attributes.customerPrice }
+                .filter { Double($0) ?? 0 > 0 }
+                .prefix(20)
+            return mcpText("Error: no price point matching $\(priceStr). Available: \(available.joined(separator: ", "))")
+        }
+
+        if let effectiveDate {
+            // Scheduled price change: keep current price until effectiveDate, then switch
+            let freePoint = pricePoints.first(where: {
+                let p = $0.attributes.customerPrice ?? "0"
+                return p == "0" || p == "0.0" || p == "0.00"
+            })
+            // Use free point as default current price
+            let currentId = freePoint?.id ?? match.id
+            try await service.setScheduledAppPrice(
+                appId: appId,
+                currentPricePointId: currentId,
+                futurePricePointId: match.id,
+                effectiveDate: effectiveDate
+            )
+            return mcpJSON(["success": true, "price": priceStr, "effectiveDate": effectiveDate, "message": "Scheduled price change for \(effectiveDate)"])
+        }
+
+        try await service.setAppPrice(appId: appId, pricePointId: match.id)
+        return mcpJSON(["success": true, "price": priceStr, "pricePointId": match.id])
+    }
+
+    private func executeASCCreateIAP(_ args: [String: Any]) async throws -> [String: Any] {
+        guard let productId = args["productId"] as? String,
+              let name = args["name"] as? String,
+              let type = args["type"] as? String,
+              let displayName = args["displayName"] as? String,
+              let priceStr = args["price"] as? String else {
+            throw MCPServerService.MCPError.invalidToolArgs
+        }
+        let description = args["description"] as? String
+
+        guard let service = await MainActor.run(body: { appState.ascManager.service }) else {
+            return mcpText("Error: ASC service not configured")
+        }
+        guard let appId = await MainActor.run(body: { appState.ascManager.app?.id }) else {
+            return mcpText("Error: no ASC app loaded. Open a project with a bundle ID first.")
+        }
+
+        // Validate type
+        let validTypes = ["CONSUMABLE", "NON_CONSUMABLE", "NON_RENEWING_SUBSCRIPTION"]
+        guard validTypes.contains(type) else {
+            return mcpText("Error: invalid type '\(type)'. Must be one of: \(validTypes.joined(separator: ", "))")
+        }
+
+        // Step 1: Create IAP
+        let iap = try await service.createInAppPurchase(
+            appId: appId, name: name, productId: productId, inAppPurchaseType: type
+        )
+
+        // Step 2: Localize (en-US)
+        try await service.localizeInAppPurchase(
+            iapId: iap.id, locale: "en-US", name: displayName, description: description
+        )
+
+        // Step 3: Fetch price points and find match
+        let pricePoints = try await service.fetchInAppPurchasePricePoints(iapId: iap.id)
+        guard let match = pricePoints.first(where: { Self.priceMatches($0.attributes.customerPrice, target: priceStr) }) else {
+            let available = pricePoints.compactMap { $0.attributes.customerPrice }
+                .filter { Double($0) ?? 0 > 0 }
+                .prefix(20)
+            return mcpText("IAP created (id: \(iap.id)) and localized, but no price point matching $\(priceStr). Available: \(available.joined(separator: ", ")). Set price manually.")
+        }
+
+        // Step 4: Set price
+        try await service.setInAppPurchasePrice(iapId: iap.id, pricePointId: match.id)
+
+        return mcpJSON([
+            "success": true,
+            "iapId": iap.id,
+            "productId": productId,
+            "type": type,
+            "displayName": displayName,
+            "price": priceStr
+        ] as [String: Any])
+    }
+
+    private func executeASCCreateSubscription(_ args: [String: Any]) async throws -> [String: Any] {
+        guard let groupName = args["groupName"] as? String,
+              let productId = args["productId"] as? String,
+              let name = args["name"] as? String,
+              let displayName = args["displayName"] as? String,
+              let duration = args["duration"] as? String,
+              let priceStr = args["price"] as? String else {
+            throw MCPServerService.MCPError.invalidToolArgs
+        }
+        let description = args["description"] as? String
+
+        guard let service = await MainActor.run(body: { appState.ascManager.service }) else {
+            return mcpText("Error: ASC service not configured")
+        }
+        guard let appId = await MainActor.run(body: { appState.ascManager.app?.id }) else {
+            return mcpText("Error: no ASC app loaded. Open a project with a bundle ID first.")
+        }
+
+        // Validate duration
+        let validDurations = ["ONE_WEEK", "ONE_MONTH", "TWO_MONTHS", "THREE_MONTHS", "SIX_MONTHS", "ONE_YEAR"]
+        guard validDurations.contains(duration) else {
+            return mcpText("Error: invalid duration '\(duration)'. Must be one of: \(validDurations.joined(separator: ", "))")
+        }
+
+        // Step 1: Find or create subscription group
+        let existingGroups = try await service.fetchSubscriptionGroups(appId: appId)
+        let group: ASCSubscriptionGroup
+        if let existing = existingGroups.first(where: { $0.attributes.referenceName == groupName }) {
+            group = existing
+        } else {
+            group = try await service.createSubscriptionGroup(appId: appId, referenceName: groupName)
+            // Localize the new group
+            try await service.localizeSubscriptionGroup(groupId: group.id, locale: "en-US", name: groupName)
+        }
+
+        // Step 2: Create subscription
+        let sub = try await service.createSubscription(
+            groupId: group.id, name: name, productId: productId, subscriptionPeriod: duration
+        )
+
+        // Step 3: Localize subscription (en-US)
+        try await service.localizeSubscription(
+            subscriptionId: sub.id, locale: "en-US", name: displayName, description: description
+        )
+
+        // Step 4: Fetch price points and find match
+        let pricePoints = try await service.fetchSubscriptionPricePoints(subscriptionId: sub.id)
+        guard let match = pricePoints.first(where: { Self.priceMatches($0.attributes.customerPrice, target: priceStr) }) else {
+            let available = pricePoints.compactMap { $0.attributes.customerPrice }
+                .filter { Double($0) ?? 0 > 0 }
+                .prefix(20)
+            return mcpText("Subscription created (id: \(sub.id)) and localized, but no price point matching $\(priceStr). Available: \(available.joined(separator: ", ")). Set price manually.")
+        }
+
+        // Step 5: Set price
+        try await service.setSubscriptionPrice(subscriptionId: sub.id, pricePointId: match.id)
+
+        return mcpJSON([
+            "success": true,
+            "subscriptionId": sub.id,
+            "groupId": group.id,
+            "groupName": groupName,
+            "productId": productId,
+            "displayName": displayName,
+            "duration": duration,
+            "price": priceStr
+        ] as [String: Any])
+    }
+
     // MARK: - Tab State Tool
 
     private func executeGetTabState(_ args: [String: Any]) async throws -> [String: Any] {
@@ -1090,9 +989,9 @@ actor MCPToolExecutor {
         }
 
         // Build tab-specific data
-        let projectId = appState.activeProjectId
         let tabData = await MainActor.run { () -> [String: Any] in
-            tabStateData(for: tab, asc: appState.ascManager, projectId: projectId)
+            let projectId = appState.activeProjectId
+            return tabStateData(for: tab, asc: appState.ascManager, projectId: projectId)
         }
         for (key, value) in tabData {
             result[key] = value
@@ -1302,35 +1201,12 @@ actor MCPToolExecutor {
     // MARK: - Build Pipeline Tools
 
     private func executeSetupSigning(_ args: [String: Any]) async throws -> [String: Any] {
-        // Validate project and credentials
-        guard let project = await MainActor.run(body: { appState.activeProject }) else {
-            return mcpText("Error: no active project. Open a project first.")
-        }
-        guard let service = await MainActor.run(body: { appState.ascManager.service }) else {
-            return mcpText("Error: ASC credentials not configured. Set up App Store Connect credentials first.")
-        }
-
-        // Resolve bundle ID
-        let bundleId = await MainActor.run { () -> String? in
-            let storage = ProjectStorage()
-            return storage.readMetadata(projectId: project.id)?.bundleIdentifier
-        }
-        guard let bundleId, !bundleId.isEmpty else {
-            return mcpText("Error: no bundle identifier set. Use asc_fill_form tab=settings.bundleId to set it first.")
-        }
-
-        // Cross-validate: if an ASC app is loaded, ensure bundle IDs match
-        let ascBundleId = await MainActor.run { appState.ascManager.app?.bundleId }
-        if let ascBundleId, !ascBundleId.isEmpty, ascBundleId != bundleId {
-            return mcpText("Error: bundle ID mismatch. Project has '\(bundleId)' but the active App Store Connect app uses '\(ascBundleId)'. Update the bundle ID via asc_fill_form tab=settings.bundleId field=bundleId value=\(ascBundleId)")
-        }
-
-        // Resolve team ID from args, project metadata, or nil
-        let savedTeamId = await MainActor.run { () -> String? in
-            let storage = ProjectStorage()
-            return storage.readMetadata(projectId: project.id)?.teamId
-        }
-        let teamId = args["teamId"] as? String ?? savedTeamId
+        let (optCtx, err) = await requireBuildContext()
+        guard let ctx = optCtx else { return err! }
+        let project = ctx.project
+        let bundleId = ctx.bundleId
+        let service = ctx.service
+        let teamId = args["teamId"] as? String ?? (ctx.teamId.isEmpty ? nil : ctx.teamId)
 
         await MainActor.run {
             appState.ascManager.buildPipelinePhase = .signingSetup
@@ -1388,31 +1264,11 @@ actor MCPToolExecutor {
     }
 
     private func executeBuildIPA(_ args: [String: Any]) async throws -> [String: Any] {
-        guard let project = await MainActor.run(body: { appState.activeProject }) else {
-            return mcpText("Error: no active project.")
-        }
-
-        let bundleId = await MainActor.run { () -> String? in
-            let storage = ProjectStorage()
-            return storage.readMetadata(projectId: project.id)?.bundleIdentifier
-        }
-        guard let bundleId, !bundleId.isEmpty else {
-            return mcpText("Error: no bundle identifier set.")
-        }
-
-        // Cross-validate bundle ID against active ASC app
-        let ascBundleId = await MainActor.run { appState.ascManager.app?.bundleId }
-        if let ascBundleId, !ascBundleId.isEmpty, ascBundleId != bundleId {
-            return mcpText("Error: bundle ID mismatch. Project has '\(bundleId)' but App Store Connect app uses '\(ascBundleId)'. Update via asc_fill_form tab=settings.bundleId field=bundleId value=\(ascBundleId)")
-        }
-
-        let teamId = await MainActor.run { () -> String? in
-            let storage = ProjectStorage()
-            return storage.readMetadata(projectId: project.id)?.teamId
-        }
-        guard let teamId, !teamId.isEmpty else {
-            return mcpText("Error: no team ID set. Run app_store_setup_signing first.")
-        }
+        let (optCtx, err) = await requireBuildContext(needsTeamId: true)
+        guard let ctx = optCtx else { return err! }
+        let project = ctx.project
+        let bundleId = ctx.bundleId
+        let teamId = ctx.teamId
 
         let scheme = args["scheme"] as? String
         let configuration = args["configuration"] as? String
@@ -1463,11 +1319,11 @@ actor MCPToolExecutor {
     }
 
     private func executeUploadToTestFlight(_ args: [String: Any]) async throws -> [String: Any] {
-        guard await MainActor.run(body: { appState.activeProject }) != nil else {
-            return mcpText("Error: no active project.")
-        }
         guard let credentials = await MainActor.run(body: { appState.ascManager.credentials }) else {
             return mcpText("Error: ASC credentials not configured.")
+        }
+        guard await MainActor.run(body: { appState.activeProject }) != nil else {
+            return mcpText("Error: no active project.")
         }
 
         // Resolve IPA path
@@ -1581,98 +1437,45 @@ actor MCPToolExecutor {
         return mcpText("{}")
     }
 
-    private func humanDescription(tool: String, args: [String: Any]) -> String {
-        switch tool {
-        case "project_create":
-            let name = args["name"] as? String ?? "unknown"
-            let type = args["type"] as? String ?? "blitz"
-            return "Create a new project named '\(name)' (type: \(type))"
-        case "project_open":
-            let id = args["projectId"] as? String ?? "unknown"
-            return "Open project '\(id)'"
-        case "project_import":
-            let path = args["path"] as? String ?? "unknown"
-            return "Import project from '\(path)'"
-        case "project_close":
-            return "Close the current project"
-        case "simulator_select_device":
-            let udid = args["udid"] as? String ?? "unknown"
-            return "Boot simulator '\(udid)'"
-        case "simulator_start_streaming":
-            return "Start screen capture streaming"
-        case "simulator_stop_streaming":
-            return "Stop screen capture streaming"
-        case "db_disconnect":
-            return "Disconnect from the database"
-        case "db_insert_record":
-            return "Insert a new database record"
-        case "db_update_record":
-            let id = args["id"] as? String ?? "unknown"
-            return "Update database record '\(id)'"
-        case "db_delete_record":
-            let id = args["id"] as? String ?? "unknown"
-            return "Delete database record '\(id)'"
-        case "settings_update":
-            return "Update app settings"
-        case "settings_save":
-            return "Save settings to disk"
-        case "recording_start":
-            return "Start screen recording"
-        case "recording_stop":
-            return "Stop screen recording"
-        case "asc_fill_form":
-            let tab = args["tab"] as? String ?? "unknown"
-            let count = (args["fields"] as? [[String: Any]])?.count ?? 0
-            return "Fill \(count) field(s) in \(tab)"
-        case "asc_upload_screenshots":
-            let count = (args["screenshotPaths"] as? [String])?.count ?? 0
-            return "Upload \(count) screenshot(s) to App Store Connect"
-        case "asc_open_submit_preview":
-            return "Check readiness and open Submit for Review"
-        case "app_store_setup_signing":
-            return "Set up iOS code signing (certificate, profile, bundle ID)"
-        case "app_store_build":
-            let scheme = args["scheme"] as? String ?? "auto-detect"
-            return "Build IPA (scheme: \(scheme))"
-        case "app_store_upload":
-            return "Upload IPA to App Store Connect / TestFlight"
-        default:
-            return "Execute '\(tool)'"
-        }
+    /// Check for ASC write error and return it, clearing pending form values.
+    private func checkASCWriteError(tab: String) async -> [String: Any]? {
+        guard let error = await MainActor.run(body: { appState.ascManager.writeError }) else { return nil }
+        _ = await MainActor.run { appState.ascManager.pendingFormValues.removeValue(forKey: tab) }
+        return mcpText("Error: \(error)")
     }
 
-    private func parseDeviceAction(_ type: String, params: [String: Any]) throws -> DeviceAction {
-        switch type {
-        case "tap":
-            let x = params["x"] as? Double ?? 0
-            let y = params["y"] as? Double ?? 0
-            return .tap(x: x, y: y)
-        case "swipe":
-            return .swipe(
-                fromX: params["fromX"] as? Double ?? 0,
-                fromY: params["fromY"] as? Double ?? 0,
-                toX: params["toX"] as? Double ?? 0,
-                toY: params["toY"] as? Double ?? 0,
-                duration: params["duration"] as? Double
-            )
-        case "button":
-            let button = params["button"] as? String ?? "HOME"
-            guard let buttonType = DeviceAction.ButtonType(rawValue: button) else {
-                throw MCPServerService.MCPError.invalidToolArgs
-            }
-            return .button(buttonType)
-        case "input-text":
-            let text = params["text"] as? String ?? ""
-            return .inputText(text)
-        case "key":
-            if let code = params["key"] as? Int {
-                return .key(.keycode(code))
-            } else if let char = params["key"] as? String {
-                return .key(.character(char))
-            }
-            throw MCPServerService.MCPError.invalidToolArgs
-        default:
-            throw MCPServerService.MCPError.unknownTool(type)
+    private struct BuildContext {
+        let project: Project
+        let bundleId: String
+        let teamId: String
+        let service: AppStoreConnectService
+    }
+
+    /// Resolve and validate bundle ID + ASC service for build pipeline tools.
+    /// Returns (context, nil) on success or (nil, errorResponse) on failure.
+    private func requireBuildContext(needsTeamId: Bool = false) async -> (BuildContext?, [String: Any]?) {
+        guard let project = await MainActor.run(body: { appState.activeProject }) else {
+            return (nil, mcpText("Error: no active project."))
         }
+        guard let service = await MainActor.run(body: { appState.ascManager.service }) else {
+            return (nil, mcpText("Error: ASC credentials not configured."))
+        }
+        let bundleId = await MainActor.run { () -> String? in
+            ProjectStorage().readMetadata(projectId: project.id)?.bundleIdentifier
+        }
+        guard let bundleId, !bundleId.isEmpty else {
+            return (nil, mcpText("Error: no bundle identifier set. Use asc_fill_form tab=settings.bundleId to set it first."))
+        }
+        let ascBundleId = await MainActor.run { appState.ascManager.app?.bundleId }
+        if let ascBundleId, !ascBundleId.isEmpty, ascBundleId != bundleId {
+            return (nil, mcpText("Error: bundle ID mismatch. Project has '\(bundleId)' but ASC app uses '\(ascBundleId)'."))
+        }
+        let teamId = await MainActor.run { () -> String? in
+            ProjectStorage().readMetadata(projectId: project.id)?.teamId
+        }
+        if needsTeamId, (teamId == nil || teamId!.isEmpty) {
+            return (nil, mcpText("Error: no team ID set. Run app_store_setup_signing first."))
+        }
+        return (BuildContext(project: project, bundleId: bundleId, teamId: teamId ?? "", service: service), nil)
     }
 }
