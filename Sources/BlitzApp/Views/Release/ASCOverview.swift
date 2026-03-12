@@ -5,6 +5,7 @@ struct ASCOverview: View {
 
     private var asc: ASCManager { appState.ascManager }
     @State private var showPreview = false
+    @State private var appIcon: NSImage?
 
     var body: some View {
         ASCCredentialGate(
@@ -16,9 +17,10 @@ struct ASCOverview: View {
                 overviewContent
             }
         }
-        .task {
+        .task(id: appState.activeProjectId) {
             if let pid = appState.activeProjectId {
                 asc.checkAppIcon(projectId: pid)
+                appIcon = Self.loadAppIcon(projectId: pid)
             }
             await asc.fetchTabData(.ascOverview)
         }
@@ -39,10 +41,18 @@ struct ASCOverview: View {
             VStack(alignment: .leading, spacing: 24) {
                 if let app = asc.app {
                     HStack(spacing: 16) {
-                        Image(systemName: "app.fill")
-                            .font(.system(size: 48))
-                            .foregroundStyle(.blue)
-                            .frame(width: 64, height: 64)
+                        if let icon = appIcon {
+                            Image(nsImage: icon)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(width: 64, height: 64)
+                                .clipShape(RoundedRectangle(cornerRadius: 14))
+                        } else {
+                            Image(systemName: "app.fill")
+                                .font(.system(size: 48))
+                                .foregroundStyle(.blue)
+                                .frame(width: 64, height: 64)
+                        }
                         VStack(alignment: .leading, spacing: 4) {
                             Text(app.name)
                                 .font(.title2.weight(.semibold))
@@ -96,11 +106,19 @@ struct ASCOverview: View {
                         Text("Submission Readiness")
                             .font(.headline)
                         Spacer()
-                        Button("Submit for Review") {
+                        let versionState = asc.appStoreVersions.first(where: {
+                            let s = $0.attributes.appStoreState ?? ""
+                            return s != "READY_FOR_SALE" && s != "REMOVED_FROM_SALE"
+                                && s != "DEVELOPER_REMOVED_FROM_SALE" && !s.isEmpty
+                        })?.attributes.appStoreState ?? ""
+                        let alreadySubmitted = ["WAITING_FOR_REVIEW", "IN_REVIEW", "PENDING_DEVELOPER_RELEASE"]
+                            .contains(versionState)
+
+                        Button(alreadySubmitted ? "View Status" : "Submit for Review") {
                             showPreview = true
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(!asc.submissionReadiness.isComplete)
+                        .disabled(!alreadySubmitted && !asc.submissionReadiness.isComplete)
                     }
 
                     VStack(spacing: 0) {
@@ -262,5 +280,29 @@ struct ASCOverview: View {
         case "DEVELOPER_REMOVED_FROM_SALE": return ("Removed", .secondary)
         default: return (stateLabel(state), .secondary)
         }
+    }
+
+    private static func loadAppIcon(projectId: String) -> NSImage? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let blitzPath = "\(home)/.blitz/projects/\(projectId)/assets/AppIcon/icon_1024.png"
+        if let image = NSImage(contentsOfFile: blitzPath) { return image }
+
+        let projectDir = "\(home)/.blitz/projects/\(projectId)"
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(atPath: projectDir) else { return nil }
+        while let file = enumerator.nextObject() as? String {
+            guard file.hasSuffix("AppIcon.appiconset/Contents.json") else { continue }
+            let contentsPath = "\(projectDir)/\(file)"
+            guard let data = fm.contents(atPath: contentsPath),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let images = json["images"] as? [[String: Any]] else { continue }
+            for entry in images {
+                if let filename = entry["filename"] as? String {
+                    let iconDir = (contentsPath as NSString).deletingLastPathComponent
+                    if let image = NSImage(contentsOfFile: "\(iconDir)/\(filename)") { return image }
+                }
+            }
+        }
+        return nil
     }
 }

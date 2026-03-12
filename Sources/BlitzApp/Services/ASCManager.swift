@@ -949,12 +949,39 @@ final class ASCManager {
         }
     }
 
-    func submitForReview() async {
+    /// The pending version ID (not live / not removed).
+    var pendingVersionId: String? {
+        appStoreVersions.first {
+            let s = $0.attributes.appStoreState ?? ""
+            return s != "READY_FOR_SALE" && s != "REMOVED_FROM_SALE"
+                && s != "DEVELOPER_REMOVED_FROM_SALE" && !s.isEmpty
+        }?.id ?? appStoreVersions.first?.id
+    }
+
+    func attachBuild(buildId: String) async {
+        guard let service else { return }
+        guard let versionId = pendingVersionId else {
+            writeError = "No app store version found to attach build to."
+            return
+        }
+        writeError = nil
+        do {
+            try await service.attachBuild(versionId: versionId, buildId: buildId)
+        } catch {
+            writeError = error.localizedDescription
+        }
+    }
+
+    func submitForReview(attachBuildId: String? = nil) async {
         guard let service else { return }
         guard let appId = app?.id, let versionId = appStoreVersions.first?.id else { return }
         isSubmitting = true
         submissionError = nil
         do {
+            // Attach build if specified
+            if let buildId = attachBuildId {
+                try await service.attachBuild(versionId: versionId, buildId: buildId)
+            }
             try await service.submitForReview(appId: appId, versionId: versionId)
             isSubmitting = false
             // Refresh versions to show new state
