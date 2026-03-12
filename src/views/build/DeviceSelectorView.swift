@@ -26,19 +26,6 @@ struct DeviceSelectorView: View {
                 }
             }
 
-            Section("Physical Devices") {
-                ForEach(appState.simulatorManager.physicalDevices) { device in
-                    Button(device.name) {
-                        // Handle physical device selection
-                    }
-                }
-
-                if appState.simulatorManager.physicalDevices.isEmpty {
-                    Text("No devices connected")
-                        .foregroundStyle(.secondary)
-                }
-            }
-
             Divider()
 
             Button("Refresh Devices") {

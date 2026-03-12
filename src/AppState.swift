@@ -163,7 +163,6 @@ final class ProjectManager {
 final class SimulatorManager {
     var simulators: [SimulatorInfo] = []
     var bootedDeviceId: String?
-    var physicalDevices: [PhysicalDevice] = []
     var isStreaming = false
     var streamFPS: Int = 30
     var isBooting = false
