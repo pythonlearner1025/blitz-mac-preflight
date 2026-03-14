@@ -13,6 +13,7 @@ struct ASCCredentialForm: View {
     @State private var isSaving = false
     @State private var saveError: String?
     @State private var showFilePicker = false
+    @State private var showInstructions = false
 
     private var isValid: Bool {
         !issuerId.trimmingCharacters(in: .whitespaces).isEmpty &&
@@ -41,6 +42,43 @@ struct ASCCredentialForm: View {
                             .font(.callout)
                     }
                     .fixedSize(horizontal: false, vertical: true)
+
+                    // Step-by-step instructions for first-time setup
+                    VStack(alignment: .leading, spacing: 0) {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showInstructions.toggle()
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.right")
+                                    .font(.caption2.weight(.semibold))
+                                    .rotationEffect(.degrees(showInstructions ? 90 : 0))
+                                Text("How to generate your API key")
+                                    .font(.callout.weight(.medium))
+                            }
+                            .foregroundStyle(.blue)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        if showInstructions {
+                            VStack(alignment: .leading, spacing: 8) {
+                                instructionStep(1, "Go to **App Store Connect > Users and Access > Integrations > App Store Connect API**")
+                                instructionStep(2, "Select the **Team Keys** tab (not Individual Keys)")
+                                instructionStep(3, "Click the **+** button to generate a new key")
+                                instructionStep(4, "Set Access to **Admin** and give the key a name")
+                                instructionStep(5, "Click **Generate**")
+                                instructionStep(6, "Copy the **Issuer ID** (shown at the top of the page) and the **Key ID** from the key row")
+                                instructionStep(7, "Click the **Download** button on the new key row to save the .p8 file")
+                                Text("The .p8 file can only be downloaded once. Store it securely.")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                                    .padding(.leading, 24)
+                            }
+                            .padding(.top, 8)
+                        }
+                    }
                 }
 
                 Divider()
@@ -131,6 +169,20 @@ struct ASCCredentialForm: View {
                     privateKey = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func instructionStep(_ number: Int, _ text: LocalizedStringKey) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text("\(number).")
+                .font(.caption.weight(.semibold).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 16, alignment: .trailing)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

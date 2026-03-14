@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.0.20
+- Better instructions for App Store Connect API key generation
+
 ## 1.0.19
 - Hardcode FPS to 50
 

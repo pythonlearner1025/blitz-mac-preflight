@@ -5,6 +5,8 @@ struct SettingsView: View {
     @Bindable var appState: AppState
     var mcpServer: MCPServerService?
 
+    @State private var showClearCredentialsConfirm = false
+
     private let gateableCategories: [(ApprovalRequest.ToolCategory, String)] = [
         (.ascFormMutation, "ASC form editing"),
         (.ascScreenshotMutation, "ASC screenshot upload"),
@@ -69,6 +71,48 @@ struct SettingsView: View {
                         Task { await appState.autoUpdate.checkForUpdate() }
                     }
                 }
+            }
+
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("App Store Connect Credentials")
+                        Spacer()
+                        if appState.ascManager.credentials != nil {
+                            Text("Configured")
+                                .font(.callout)
+                                .foregroundStyle(.green)
+                        } else {
+                            Text("Not set")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Button("Clear Credentials", role: .destructive) {
+                        showClearCredentialsConfirm = true
+                    }
+                    .disabled(appState.ascManager.credentials == nil)
+
+                    Text("This will remove your saved API key, Key ID, and Issuer ID. You will need to re-enter them to use App Store Connect features.")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            } header: {
+                Text("Danger Zone")
+            }
+            .confirmationDialog(
+                "Clear App Store Connect Credentials?",
+                isPresented: $showClearCredentialsConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Clear Credentials", role: .destructive) {
+                    if let projectId = appState.ascManager.loadedProjectId {
+                        appState.ascManager.deleteCredentials(projectId: projectId)
+                    }
+                }
+            } message: {
+                Text("This action cannot be undone. You will need to re-enter your API credentials to access App Store Connect data.")
             }
 
             Section("About") {
