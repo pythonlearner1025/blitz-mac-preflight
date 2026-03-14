@@ -99,18 +99,39 @@ actor MCPToolExecutor {
 
         // For asc_fill_form, pre-populate pending values so the form shows intended changes
         if name == "asc_fill_form",
-           let tab = arguments["tab"] as? String,
-           let fieldsArray = arguments["fields"] as? [[String: Any]] {
+           let tab = arguments["tab"] as? String {
             var fieldMap: [String: String] = [:]
-            for item in fieldsArray {
-                if let field = item["field"] as? String, let value = item["value"] as? String {
-                    fieldMap[field] = value
+            if let fieldsArray = arguments["fields"] as? [[String: Any]] {
+                for item in fieldsArray {
+                    if let field = item["field"] as? String, let value = item["value"] as? String {
+                        fieldMap[field] = value
+                    }
+                }
+            } else if let fieldsDict = arguments["fields"] as? [String: Any] {
+                for (key, value) in fieldsDict {
+                    fieldMap[key] = "\(value)"
+                }
+            } else if let fieldsString = arguments["fields"] as? String,
+                      let data = fieldsString.data(using: .utf8),
+                      let parsed = try? JSONSerialization.jsonObject(with: data) {
+                if let dict = parsed as? [String: Any] {
+                    for (key, value) in dict {
+                        fieldMap[key] = "\(value)"
+                    }
+                } else if let array = parsed as? [[String: Any]] {
+                    for item in array {
+                        if let field = item["field"] as? String, let value = item["value"] as? String {
+                            fieldMap[field] = value
+                        }
+                    }
                 }
             }
-            let fieldMapCopy = fieldMap
-            await MainActor.run {
-                appState.ascManager.pendingFormValues[tab] = fieldMapCopy
-                appState.ascManager.pendingFormVersion += 1
+            if !fieldMap.isEmpty {
+                let fieldMapCopy = fieldMap
+                await MainActor.run {
+                    appState.ascManager.pendingFormValues[tab] = fieldMapCopy
+                    appState.ascManager.pendingFormVersion += 1
+                }
             }
         }
 
@@ -531,18 +552,47 @@ actor MCPToolExecutor {
     ]
 
     private func executeASCFillForm(_ args: [String: Any]) async throws -> [String: Any] {
-        guard let tab = args["tab"] as? String,
-              let fieldsArray = args["fields"] as? [[String: Any]] else {
+        guard let tab = args["tab"] as? String else {
             throw MCPServerService.MCPError.invalidToolArgs
         }
 
-        // Build field map with alias resolution
+        // Build field map with alias resolution — accept multiple formats:
+        // 1. Array of {field, value} objects: [{"field":"k","value":"v"}, ...]
+        // 2. Flat dict: {"key": "value", ...}
+        // 3. JSON string containing either format above
         var fieldMap: [String: String] = [:]
-        for item in fieldsArray {
-            if let field = item["field"] as? String, let value = item["value"] as? String {
-                let resolved = Self.fieldAliases[field] ?? field
-                fieldMap[resolved] = value
+        if let fieldsArray = args["fields"] as? [[String: Any]] {
+            for item in fieldsArray {
+                if let field = item["field"] as? String, let value = item["value"] as? String {
+                    let resolved = Self.fieldAliases[field] ?? field
+                    fieldMap[resolved] = value
+                }
             }
+        } else if let fieldsDict = args["fields"] as? [String: Any] {
+            for (key, value) in fieldsDict {
+                let resolved = Self.fieldAliases[key] ?? key
+                fieldMap[resolved] = "\(value)"
+            }
+        } else if let fieldsString = args["fields"] as? String,
+                  let data = fieldsString.data(using: .utf8),
+                  let parsed = try? JSONSerialization.jsonObject(with: data) {
+            if let dict = parsed as? [String: Any] {
+                for (key, value) in dict {
+                    let resolved = Self.fieldAliases[key] ?? key
+                    fieldMap[resolved] = "\(value)"
+                }
+            } else if let array = parsed as? [[String: Any]] {
+                for item in array {
+                    if let field = item["field"] as? String, let value = item["value"] as? String {
+                        let resolved = Self.fieldAliases[field] ?? field
+                        fieldMap[resolved] = value
+                    }
+                }
+            }
+        }
+
+        guard !fieldMap.isEmpty else {
+            throw MCPServerService.MCPError.invalidToolArgs
         }
 
         // Validate field names against allowed set for this tab

@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.0.18
+- MCP tool bug fix
+
 ## 1.0.11 
 - Clear TCC bug fix
 

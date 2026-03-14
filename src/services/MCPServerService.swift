@@ -234,7 +234,22 @@ actor MCPServerService {
         case "tools/call":
             let toolName = params["name"] as? String ?? ""
             let toolArgs = params["arguments"] as? [String: Any] ?? [:]
-            result = try await toolExecutor.execute(name: toolName, arguments: toolArgs)
+            do {
+                result = try await toolExecutor.execute(name: toolName, arguments: toolArgs)
+            } catch {
+                // Return a proper JSON-RPC error response instead of letting the error
+                // propagate to the HTTP layer (which sends a non-JSON-RPC 500 body)
+                let errorResponse: [String: Any] = [
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": [
+                        "code": -32603,
+                        "message": error.localizedDescription
+                    ] as [String: Any]
+                ]
+                let data = try JSONSerialization.data(withJSONObject: errorResponse)
+                return String(data: data, encoding: .utf8) ?? "{}"
+            }
 
         default:
             if isNotification {

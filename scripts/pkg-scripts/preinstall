@@ -70,37 +70,36 @@ ERRORS=()
 # confusion with the new native app.
 # ============================================================================
 
+# ----------------------------------------------------------------------------
+# TAURI MIGRATION CLEANUP (can be removed once Tauri users have migrated)
+# Only runs if an old Tauri-based Blitz app is detected — skipped otherwise.
+# ----------------------------------------------------------------------------
 OLD_TAURI_APP="/Applications/Blitz.app"
-OLD_TAURI_IDS=("dev.blitz.mac" "dev1.blitz.mac")
+EXISTING_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$OLD_TAURI_APP/Contents/Info.plist" 2>/dev/null || echo "")
 
-# Check if the existing Blitz.app is an OLD Tauri version (different bundle ID)
-if [ -d "$OLD_TAURI_APP" ]; then
-    EXISTING_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$OLD_TAURI_APP/Contents/Info.plist" 2>/dev/null || echo "")
-    for OLD_ID in "${OLD_TAURI_IDS[@]}"; do
-        if [ "$EXISTING_ID" = "$OLD_ID" ]; then
-            echo "Found old Tauri Blitz app ($OLD_ID), cleaning up..." >> "$LOG"
-            killall Blitz 2>/dev/null || true
-            rm -rf "$OLD_TAURI_APP"
-            echo "Removed old Tauri Blitz.app" >> "$LOG"
-            break
-        fi
+if [ "$EXISTING_ID" = "dev.blitz.mac" ] || [ "$EXISTING_ID" = "dev1.blitz.mac" ]; then
+    echo "Found old Tauri Blitz app ($EXISTING_ID), running migration cleanup..." >> "$LOG"
+    killall Blitz 2>/dev/null || true
+    rm -rf "$OLD_TAURI_APP"
+    echo "Removed old Tauri Blitz.app" >> "$LOG"
+
+    # Forget stale pkg receipts and reset TCC for old Tauri bundle IDs
+    for OLD_ID in dev.blitz.mac dev1.blitz.mac; do
+        pkgutil --forget "$OLD_ID" >> "$LOG" 2>&1 || true
+        tccutil reset ScreenCapture "$OLD_ID" >> "$LOG" 2>&1 || true
+        tccutil reset Accessibility "$OLD_ID" >> "$LOG" 2>&1 || true
     done
+
+    # Remove .localized directories left by previous pkg relocations
+    for d in /Applications/Blitz.localized /Applications/Blitz-*.localized; do
+        [ -d "$d" ] && rm -rf "$d" && echo "Removed stale install dir: $d" >> "$LOG"
+    done
+
+    echo "Tauri migration cleanup done" >> "$LOG"
+else
+    echo "No old Tauri app detected, skipping migration cleanup" >> "$LOG"
 fi
-
-# Forget stale pkg receipts and reset TCC for old Tauri bundle IDs
-for OLD_ID in "${OLD_TAURI_IDS[@]}"; do
-    pkgutil --forget "$OLD_ID" >> "$LOG" 2>&1 || true
-    tccutil reset ScreenCapture "$OLD_ID" >> "$LOG" 2>&1 || true
-    tccutil reset Accessibility "$OLD_ID" >> "$LOG" 2>&1 || true
-done
-
-# Remove old .localized install directories left by previous pkg relocations
-for d in /Applications/Blitz.localized /Applications/Blitz-*.localized; do
-    if [ -d "$d" ]; then
-        rm -rf "$d"
-        echo "Removed stale install dir: $d" >> "$LOG"
-    fi
-done
+# ----------------------------------------------------------------------------
 
 # ============================================================================
 # 0b. Reset TCC permissions (first install only)

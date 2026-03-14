@@ -104,74 +104,72 @@ actor SimulatorService {
     }
 
     /// Open Simulator.app behind Blitz's window.
-    ///
-    /// Strategy:
-    /// 1. Float Blitz's window so it stays on top during launch
-    /// 2. Launch Simulator.app without activation (NSWorkspace API)
-    /// 3. Move Simulator's window directly behind Blitz's window (same position)
-    /// 4. Restore Blitz to normal window level
+    /// Matches blitz-cn: `open -g -a Simulator` then AppleScript to bring Blitz to front.
+    /// Also moves Simulator's window behind Blitz using the Accessibility API.
     ///
     /// ScreenCaptureKit captures occluded windows fine, so Simulator
     /// just needs to exist — it doesn't need to be visible.
     func openSimulatorAppBehind() async throws {
-        // 1. Capture Blitz's window frame and float it
-        let blitzFrame = await MainActor.run {
-            let frame = NSApp.mainWindow?.frame
-            NSApp.mainWindow?.level = .floating
-            return frame
-        }
+        // 1. Capture Blitz's frame for positioning
+        let blitzFrame = await MainActor.run { NSApp.mainWindow?.frame }
 
-        // 2. Launch Simulator without activation
-        if let simURL = NSWorkspace.shared.urlForApplication(
-            withBundleIdentifier: "com.apple.iphonesimulator"
-        ) {
-            let config = NSWorkspace.OpenConfiguration()
-            config.activates = false
-            try await NSWorkspace.shared.openApplication(at: simURL, configuration: config)
-        } else {
-            _ = try? await ProcessRunner.run("open", arguments: ["-gja", "Simulator"])
-        }
+        // 2. Open Simulator without bringing to foreground (matches blitz-cn)
+        _ = try await ProcessRunner.run("open", arguments: ["-g", "-a", "Simulator"])
 
-        // 3. Wait for Simulator window to appear, then move it behind Blitz
+        // 3. Immediately bring Blitz to front via AppleScript (matches blitz-cn's hide_simulator_window)
+        Self.bringBlitzToFront()
+
+        // 4. Wait for Simulator window to appear
         try await Task.sleep(for: .milliseconds(800))
-        if let frame = blitzFrame {
-            await Self.moveSimulatorWindowBehind(blitzFrame: frame)
-        }
 
-        // 4. Restore normal level and re-activate Blitz
-        await MainActor.run {
-            NSApp.mainWindow?.level = .normal
-            NSApp.activate()
+        // 5. Move Simulator window behind Blitz and bring Blitz to front again
+        if let frame = blitzFrame {
+            Self.moveSimulatorWindowBehind(blitzFrame: frame)
         }
+        Self.bringBlitzToFront()
+    }
+
+    /// Bring Blitz to the foreground using AppleScript (matches blitz-cn's hide_simulator_window).
+    private static func bringBlitzToFront() {
+        let script = """
+        tell application "System Events"
+            repeat with proc in (every process whose background only is false)
+                if name of proc contains "blitz" or name of proc contains "Blitz" then
+                    set frontmost of proc to true
+                    exit repeat
+                end if
+            end repeat
+        end tell
+        """
+        let appleScript = NSAppleScript(source: script)
+        var error: NSDictionary?
+        appleScript?.executeAndReturnError(&error)
     }
 
     /// Move Simulator.app's window to the same position as Blitz's window
     /// using the Accessibility API, so it's completely hidden behind Blitz.
-    @MainActor
     private static func moveSimulatorWindowBehind(blitzFrame: NSRect) {
-        // Find Simulator's pid
         guard let simApp = NSRunningApplication.runningApplications(
             withBundleIdentifier: "com.apple.iphonesimulator"
         ).first else { return }
 
         let appRef = AXUIElementCreateApplication(simApp.processIdentifier)
 
-        // Get the window list
         var windowsRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(appRef, kAXWindowsAttribute as CFString, &windowsRef) == .success,
               let windows = windowsRef as? [AXUIElement],
               let simWindow = windows.first else { return }
 
-        // Move to Blitz's origin (Accessibility uses top-left origin, NSRect uses bottom-left)
+        // Accessibility uses top-left origin; NSRect uses bottom-left
         let screenHeight = NSScreen.main?.frame.height ?? 0
-        let topLeftX = blitzFrame.origin.x
-        let topLeftY = screenHeight - blitzFrame.origin.y - blitzFrame.height
-        var position = CGPoint(x: topLeftX, y: topLeftY)
+        var position = CGPoint(
+            x: blitzFrame.origin.x,
+            y: screenHeight - blitzFrame.origin.y - blitzFrame.height
+        )
         if let posValue = AXValueCreate(.cgPoint, &position) {
             AXUIElementSetAttributeValue(simWindow, kAXPositionAttribute as CFString, posValue)
         }
 
-        // Resize to match Blitz
         var size = CGSize(width: blitzFrame.width, height: blitzFrame.height)
         if let sizeValue = AXValueCreate(.cgSize, &size) {
             AXUIElementSetAttributeValue(simWindow, kAXSizeAttribute as CFString, sizeValue)

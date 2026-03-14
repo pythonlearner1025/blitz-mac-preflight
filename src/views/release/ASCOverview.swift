@@ -38,26 +38,26 @@ struct ASCOverview: View {
     @ViewBuilder
     private var overviewContent: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 12) {
                 if let app = asc.app {
-                    HStack(spacing: 16) {
+                    HStack(spacing: 10) {
                         if let icon = appIcon {
                             Image(nsImage: icon)
                                 .resizable()
                                 .aspectRatio(contentMode: .fit)
-                                .frame(width: 64, height: 64)
-                                .clipShape(RoundedRectangle(cornerRadius: 14))
+                                .frame(width: 40, height: 40)
+                                .clipShape(RoundedRectangle(cornerRadius: 9))
                         } else {
                             Image(systemName: "app.fill")
-                                .font(.system(size: 48))
+                                .font(.system(size: 30))
                                 .foregroundStyle(.blue)
-                                .frame(width: 64, height: 64)
+                                .frame(width: 40, height: 40)
                         }
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: 2) {
                             Text(app.name)
-                                .font(.title2.weight(.semibold))
+                                .font(.headline)
                             Text(app.bundleId)
-                                .font(.body)
+                                .font(.callout)
                                 .foregroundStyle(.secondary)
                                 .fontDesign(.monospaced)
                         }
@@ -75,7 +75,7 @@ struct ASCOverview: View {
 
                 LazyVGrid(
                     columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())],
-                    spacing: 16
+                    spacing: 8
                 ) {
                     metricCard(
                         title: "Live Version",
@@ -182,9 +182,9 @@ struct ASCOverview: View {
                                         .lineLimit(1)
                                 }
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            Divider().padding(.leading, 16)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 5)
+                            Divider().padding(.leading, 12)
                         }
                     }
                     .background(.background.secondary)
@@ -208,7 +208,8 @@ struct ASCOverview: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
             }
-            .padding(24)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
         }
     }
 
@@ -224,18 +225,18 @@ struct ASCOverview: View {
     }
 
     private func metricCard(title: String, value: String, subtitle: String, color: Color, icon: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: icon).foregroundStyle(color)
-                Text(title).font(.callout).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Image(systemName: icon).font(.callout).foregroundStyle(color)
+                Text(title).font(.caption).foregroundStyle(.secondary)
             }
-            Text(value).font(.title2.weight(.semibold))
-            Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.body.weight(.semibold))
+            Text(subtitle).font(.caption2).foregroundStyle(.secondary)
         }
-        .padding(16)
+        .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.background.secondary)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private func versionRow(_ version: ASCAppStoreVersion) -> some View {
