@@ -1,7 +1,7 @@
 <div align="center">
   <img src=".github/assets/logo.png" width="100" />
   <h1>Blitz</h1>
-  <p>Native macOS IDE for building, testing, and shipping iOS apps with AI agents</p>
+  <p>Native macOS app for building, testing, and shipping iOS apps with AI agents</p>
 
   [![Website](https://img.shields.io/badge/blitz.dev-website-black)](https://blitz.dev/)
   [![Discord](https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/wJQ6dA95S6)
@@ -16,7 +16,7 @@
 
 <br />
 
-Blitz is a native macOS app that gives AI agents full control over the iOS development lifecycle — simulator management, screen capture, database browsing, App Store Connect integration, and code signing. It includes a built-in MCP server so Claude Code (or any MCP client) can build, test, and submit your app to the App Store.
+Blitz is a native macOS app that gives AI agents full control over the iOS development lifecycle — simulator/iPhone management, database setup, and App Store Connect submission. It includes built-in MCP servers so Claude Code (or any MCP client) can build, test, and submit your app to the App Store.
 
 <div align="center">
   <img src=".github/assets/before-after.png" width="800" />
@@ -54,12 +54,6 @@ For signed builds, copy `.env.example` to `.env` and fill in your Apple Develope
 bash scripts/bundle.sh release
 ```
 
-## Run tests
-
-```bash
-swift test
-```
-
 ## Verify a release binary
 
 Every GitHub release includes `SHA256SUMS.txt` with checksums of the CI-built binary. To verify:
@@ -84,7 +78,7 @@ All release binaries are built by the public [GitHub Actions workflow](.github/w
 ## Security and privacy
 
 - **No analytics or telemetry.** The app makes zero tracking calls. No data is collected about your usage.
-- **No phone-home.** The only network requests are to Apple's App Store Connect API (when you use ASC features) and `api.blitzapp.dev` for optional update checks.
+- **No phone-home.** The only network requests are to Apple's App Store Connect API (when you use ASC features) and GitHub's releases API for optional update checks.
 - **MCP server is localhost-only.** The built-in MCP server binds to `127.0.0.1` and is never exposed to the network.
 - **No access to sensitive data.** The app does not access your contacts, photos, location, or any personal data. Screen capture is limited to the iOS Simulator window.
 

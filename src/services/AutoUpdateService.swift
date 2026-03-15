@@ -35,8 +35,7 @@ final class AutoUpdateManager {
     private var downloadURL: String?
     private var downloadFilename: String?
 
-    private static let latestURL = "https://api.blitzapp.dev/download/releases/apps/com.blitz.macos/latest.json"
-    private static let baseURL = "https://api.blitzapp.dev/download/releases/"
+    private static let releasesURL = "https://api.github.com/repos/blitzdotdev/blitz-mac/releases/latest"
 
     /// Current app version from Info.plist (falls back to "0.0.0" in dev builds).
     var currentVersion: String {
@@ -49,19 +48,25 @@ final class AutoUpdateManager {
         state = .checking
 
         do {
-            let (data, _) = try await URLSession.shared.data(from: URL(string: Self.latestURL)!)
+            var request = URLRequest(url: URL(string: Self.releasesURL)!)
+            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+
+            let (data, _) = try await URLSession.shared.data(for: request)
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let remoteVersion = json["version"] as? String else {
+                  let tagName = json["tag_name"] as? String,
+                  let assets = json["assets"] as? [[String: Any]] else {
                 state = .idle
                 return
             }
 
-            // Prefer .app.zip from "app" object, fall back to top-level .pkg
-            let appObj = json["app"] as? [String: Any]
-            let path = (appObj?["path"] as? String) ?? (json["path"] as? String)
-            let filename = (appObj?["filename"] as? String) ?? (json["filename"] as? String)
+            let remoteVersion = tagName.replacingOccurrences(of: "v", with: "")
 
-            guard let path, let filename else {
+            // Find the .pkg asset first, fall back to .app.zip
+            let pkgAsset = assets.first { ($0["name"] as? String)?.hasSuffix(".pkg") == true }
+            let zipAsset = assets.first { ($0["name"] as? String)?.hasSuffix(".app.zip") == true }
+            guard let asset = pkgAsset ?? zipAsset,
+                  let downloadUrl = asset["browser_download_url"] as? String,
+                  let filename = asset["name"] as? String else {
                 state = .idle
                 return
             }
@@ -74,10 +79,10 @@ final class AutoUpdateManager {
 
             print("[AutoUpdate] Update available: \(currentVersion) -> \(remoteVersion)")
             latestVersion = remoteVersion
-            downloadURL = Self.baseURL + path
+            downloadURL = downloadUrl
             downloadFilename = filename
 
-            let notes = json["release_notes"] as? String ?? ""
+            let notes = json["body"] as? String ?? ""
             state = .available(version: remoteVersion, releaseNotes: notes)
         } catch {
             print("[AutoUpdate] Check failed: \(error)")
@@ -93,9 +98,13 @@ final class AutoUpdateManager {
         state = .downloading(percent: 0)
 
         do {
-            let zipPath = try await downloadApp(url: url, filename: filename)
+            let downloadedPath = try await downloadApp(url: url, filename: filename)
             state = .installing
-            try await installApp(zipPath: zipPath)
+            if filename.hasSuffix(".pkg") {
+                try await installPkg(pkgPath: downloadedPath)
+            } else {
+                try await installApp(zipPath: downloadedPath)
+            }
             // If we get here, the app is about to relaunch
         } catch {
             state = .failed(error.localizedDescription)
@@ -136,6 +145,38 @@ final class AutoUpdateManager {
         try data.write(to: destination)
         print("[AutoUpdate] Downloaded \(data.count) bytes to \(destination.path)")
         return destination
+    }
+
+    private func installPkg(pkgPath: URL) async throws {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let pkg = pkgPath.path.replacingOccurrences(of: "'", with: "'\\''")
+
+        let installScript = """
+        do shell script "installer -pkg '\(pkg)' -target / 2>&1" with administrator privileges
+        """
+
+        let relaunchScript = """
+        do shell script "(while kill -0 \(pid) 2>/dev/null; do sleep 0.2; done; open /Applications/Blitz.app) &>/dev/null &"
+        """
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", installScript, "-e", relaunchScript]
+        process.standardOutput = nil
+        process.standardError = nil
+
+        try process.run()
+        process.waitUntilExit()
+
+        try? FileManager.default.removeItem(at: pkgPath)
+
+        guard process.terminationStatus == 0 else {
+            throw UpdateError(message: "Installation failed (exit code \(process.terminationStatus))")
+        }
+
+        await MainActor.run {
+            NSApplication.shared.terminate(nil)
+        }
     }
 
     private func installApp(zipPath: URL) async throws {
