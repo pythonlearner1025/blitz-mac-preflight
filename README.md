@@ -1,6 +1,26 @@
-# Blitz
+<div align="center">
+  <img src=".github/assets/logo.png" width="100" />
+  <h1>Blitz</h1>
+  <p>Native macOS IDE for building, testing, and shipping iOS apps with AI agents</p>
 
-A native macOS app for iOS development. Simulator management, screen capture, database browsing, App Store Connect integration, and an MCP server for Claude Code.
+  [![Website](https://img.shields.io/badge/blitz.dev-website-black)](https://blitz.dev/)
+  [![Discord](https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/wJQ6dA95S6)
+  [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+</div>
+
+<br />
+
+<div align="center">
+  <img src=".github/assets/hero.png" width="600" />
+</div>
+
+<br />
+
+Blitz is a native macOS app that gives AI agents full control over the iOS development lifecycle — simulator management, screen capture, database browsing, App Store Connect integration, and code signing. It includes a built-in MCP server so Claude Code (or any MCP client) can build, test, and submit your app to the App Store.
+
+<div align="center">
+  <img src=".github/assets/before-after.png" width="800" />
+</div>
 
 ## Requirements
 
