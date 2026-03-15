@@ -2,7 +2,7 @@
 name = "sample-app"
 main = "./src-backend/worker.ts"
 compatibility_date = "2024-09-25"
-account_id = "3c4cf55a12810e878be2349f1411ca08"
+account_id = "YOUR_CLOUDFLARE_ACCOUNT_ID"
 compatibility_flags = [ "nodejs_compat" ]
 
 routes = [

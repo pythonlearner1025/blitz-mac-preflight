@@ -180,7 +180,7 @@ if [ -n "$INSTALLER_IDENTITY" ]; then
     echo "   Signed: $OUTPUT_PKG"
 else
     echo "WARNING: APPLE_INSTALLER_IDENTITY not set — .pkg will be unsigned"
-    echo "   Set it to: Developer ID Installer: Minjune Song (4GS43493GL)"
+    echo "   Set it to: Developer ID Installer: Your Name (YOUR_TEAM_ID)"
 fi
 
 # --- Notarize + staple ---

@@ -1,0 +1,89 @@
+name: Build & Verify
+
+on:
+  push:
+    branches: [main, open]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Build (release)
+        run: swift build -c release
+
+      - name: Run tests
+        run: swift test
+
+      - name: Bundle .app
+        run: |
+          # Ad-hoc sign for CI (no Developer ID available)
+          APPLE_SIGNING_IDENTITY="-" bash scripts/bundle.sh release
+
+      - name: Generate checksums
+        run: |
+          cd .build
+          # Checksum the entire .app as a zip
+          ditto -c -k --sequesterRsrc --keepParent Blitz.app Blitz.app.zip
+          shasum -a 256 Blitz.app.zip > Blitz.app.zip.sha256
+          cat Blitz.app.zip.sha256
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Blitz-${{ github.sha }}
+          path: |
+            .build/Blitz.app.zip
+            .build/Blitz.app.zip.sha256
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Build release
+        run: |
+          swift build -c release
+          APPLE_SIGNING_IDENTITY="-" bash scripts/bundle.sh release
+
+      - name: Create checksums
+        run: |
+          cd .build
+          ditto -c -k --sequesterRsrc --keepParent Blitz.app Blitz.app.zip
+          shasum -a 256 Blitz.app.zip > SHA256SUMS.txt
+          # Also checksum every binary inside the .app for granular verification
+          find Blitz.app/Contents/MacOS -type f -perm +111 -exec shasum -a 256 {} + >> SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            .build/Blitz.app.zip
+            .build/SHA256SUMS.txt
+          body: |
+            ## Verify this build
+
+            Download `Blitz.app.zip` and `SHA256SUMS.txt`, then run:
+            ```bash
+            shasum -a 256 -c SHA256SUMS.txt
+            ```
+
+            Or build from source yourself and compare:
+            ```bash
+            bash scripts/verify-build.sh v${{ github.ref_name }}
+            ```

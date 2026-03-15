@@ -232,7 +232,7 @@ PRODUCT_BUNDLE_IDENTIFIER = com.example.myapp;
 
 ```bash
 PBXPROJ="ios/BlitzApp.xcodeproj/project.pbxproj"
-TEAM_ID="4GS43493GL"
+TEAM_ID="YOUR_TEAM_ID"
 BUNDLE_ID="com.example.myapp"
 
 # TargetAttributes
@@ -807,14 +807,13 @@ Tested fully end-to-end:
 - Xcode 26.1.1
 - OpenSSL 3.6.0
 - React Native 0.79 project (BlitzApp warm template)
-- Team ID: `4GS43493GL`
-- Bundle ID: `bliz-test`
-- Distribution cert: `GFT35D4XLJ` (Apple Distribution: Minjune Song, created via API)
-- App Store provisioning profile: `FC522Y5328` (created via API)
-- IPA: 9.8MB
-- **Upload: SUCCEEDED** — Delivery UUID: `58600450-f53b-4bd2-9372-8bfa8b42c596`
-- Transfer: 9.8MB in 8.2 seconds at 1.2MB/s
-- **App Store Submission: SUCCEEDED** — Review submission `67af0291-2d69-4b8f-8e09-67528dfc7d33` state: `WAITING_FOR_REVIEW`
+- Team ID: `YOUR_TEAM_ID`
+- Bundle ID: `your.bundle.id`
+- Distribution cert: created via API
+- App Store provisioning profile: created via API
+- IPA: ~10MB
+- **Upload: SUCCEEDED**
+- **App Store Submission: SUCCEEDED**
 
 ### altool auth note
 

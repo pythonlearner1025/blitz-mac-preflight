@@ -94,10 +94,10 @@ The Swift app needs hardened runtime exceptions for the Node.js sidecar (JIT, un
 
 ### Environment variables required for release
 ```
-APPLE_SIGNING_IDENTITY=Developer ID Application: Minjune Song (4GS43493GL)
-APPLE_INSTALLER_IDENTITY=Developer ID Installer: Minjune Song (4GS43493GL)
-APPLE_API_KEY=<key ID>
-APPLE_API_KEY_PATH=~/superapp/AuthKey_84WK494H33.p8
+APPLE_SIGNING_IDENTITY=Developer ID Application: Your Name (YOUR_TEAM_ID)
+APPLE_INSTALLER_IDENTITY=Developer ID Installer: Your Name (YOUR_TEAM_ID)
+APPLE_API_KEY=<your App Store Connect API key ID>
+APPLE_API_KEY_PATH=~/path/to/AuthKey_XXXXXXXXXX.p8
 APPLE_API_ISSUER=<issuer UUID>
 CLOUDFLARE_ACCOUNT_ID=<id>
 R2_ACCESS_KEY_ID=<key>
