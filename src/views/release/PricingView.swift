@@ -12,7 +12,7 @@ struct MonetizationView: View {
             projectId: appState.activeProjectId ?? "",
             bundleId: appState.activeProject?.metadata.bundleIdentifier
         ) {
-            ASCTabContent(asc: asc, tab: .monetization) {
+            ASCTabContent(asc: asc, tab: .monetization, platform: appState.activeProject?.platform ?? .iOS) {
                 monetizationContent
             }
         }

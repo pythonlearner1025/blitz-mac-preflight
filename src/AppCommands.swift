@@ -39,7 +39,7 @@ struct AppCommands: Commands {
                             storage.updateLastOpened(projectId: project.id)
                             appState.activeProjectId = project.id
                         } label: {
-                            Label(project.name, systemImage: projectIcon(project.type))
+                            Label(project.name, systemImage: projectIcon(project))
                         }
                     }
 
@@ -131,8 +131,9 @@ struct AppCommands: Commands {
         }
     }
 
-    private func projectIcon(_ type: ProjectType) -> String {
-        switch type {
+    private func projectIcon(_ project: Project) -> String {
+        if project.platform == .macOS { return "desktopcomputer" }
+        switch project.type {
         case .reactNative: return "atom"
         case .swift: return "swift"
         case .flutter: return "bird"

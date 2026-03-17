@@ -11,7 +11,7 @@ struct ReviewsView: View {
             projectId: appState.activeProjectId ?? "",
             bundleId: appState.activeProject?.metadata.bundleIdentifier
         ) {
-            ASCTabContent(asc: asc, tab: .reviews) {
+            ASCTabContent(asc: asc, tab: .reviews, platform: appState.activeProject?.platform ?? .iOS) {
                 reviewsContent
             }
         }

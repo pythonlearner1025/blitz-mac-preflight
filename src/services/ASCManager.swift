@@ -72,6 +72,21 @@ final class ASCManager {
     var buildPipelinePhase: BuildPipelinePhase = .idle
     var buildPipelineMessage: String = ""  // Latest progress line from the build
 
+    /// Age rating is "configured" only if the enum fields have actual values (not nil).
+    /// ASC returns the declaration object with nil fields by default — submitting with
+    /// nil fields causes a 409.
+    private var ageRatingIsConfigured: Bool {
+        guard let ar = ageRatingDeclaration?.attributes else { return false }
+        // Check that at least the required enum fields are non-nil
+        return ar.alcoholTobaccoOrDrugUseOrReferences != nil
+            && ar.violenceCartoonOrFantasy != nil
+            && ar.violenceRealistic != nil
+            && ar.sexualContentOrNudity != nil
+            && ar.sexualContentGraphicAndNudity != nil
+            && ar.profanityOrCrudeHumor != nil
+            && ar.gamblingSimulated != nil
+    }
+
     var submissionReadiness: SubmissionReadiness {
         let loc = localizations.first
         let info = appInfoLocalization
@@ -79,7 +94,9 @@ final class ASCManager {
         let demoRequired = review?.attributes.demoAccountRequired == true
         let version = appStoreVersions.first
 
-        // Screenshot checks per display type
+        // Screenshot checks per display type — detect platform from available sets
+        let macScreenshots = screenshotSets.first { $0.attributes.screenshotDisplayType == "APP_DESKTOP" }
+        let isMacApp = macScreenshots != nil
         let iphoneScreenshots = screenshotSets.first { $0.attributes.screenshotDisplayType == "APP_IPHONE_67" }
         let ipadScreenshots = screenshotSets.first { $0.attributes.screenshotDisplayType == "APP_IPAD_PRO_3GEN_129" }
 
@@ -97,7 +114,7 @@ final class ASCManager {
             .init(label: "Copyright", value: version?.attributes.copyright),
             .init(label: "Content Rights", value: app?.contentRightsDeclaration),
             .init(label: "Primary Category", value: appInfo?.primaryCategoryId),
-            .init(label: "Age Rating", value: ageRatingDeclaration != nil ? "Configured" : nil),
+            .init(label: "Age Rating", value: ageRatingIsConfigured ? "Configured" : nil),
             .init(label: "Pricing", value: monetizationStatus),
             .init(label: "Review Contact First Name", value: review?.attributes.contactFirstName),
             .init(label: "Review Contact Last Name", value: review?.attributes.contactLastName),
@@ -111,13 +128,19 @@ final class ASCManager {
             fields.append(.init(label: "Demo Account Password", value: review?.attributes.demoAccountPassword))
         }
 
-        let iphoneCount = iphoneScreenshots.map { screenshots[$0.id]?.count ?? $0.attributes.screenshotCount ?? 0 } ?? 0
-        let ipadCount = ipadScreenshots.map { screenshots[$0.id]?.count ?? $0.attributes.screenshotCount ?? 0 } ?? 0
+        fields.append(.init(label: "App Icon", value: appIconStatus))
+
+        if isMacApp {
+            let macCount = macScreenshots.map { screenshots[$0.id]?.count ?? $0.attributes.screenshotCount ?? 0 } ?? 0
+            fields.append(.init(label: "Mac Screenshots", value: macScreenshots != nil ? "\(macCount) screenshot(s)" : nil))
+        } else {
+            let iphoneCount = iphoneScreenshots.map { screenshots[$0.id]?.count ?? $0.attributes.screenshotCount ?? 0 } ?? 0
+            let ipadCount = ipadScreenshots.map { screenshots[$0.id]?.count ?? $0.attributes.screenshotCount ?? 0 } ?? 0
+            fields.append(.init(label: "iPhone Screenshots", value: iphoneScreenshots != nil ? "\(iphoneCount) screenshot(s)" : nil))
+            fields.append(.init(label: "iPad Screenshots", value: ipadScreenshots != nil ? "\(ipadCount) screenshot(s)" : nil))
+        }
 
         fields.append(contentsOf: [
-            .init(label: "App Icon", value: appIconStatus),
-            .init(label: "iPhone Screenshots", value: iphoneScreenshots != nil ? "\(iphoneCount) screenshot(s)" : nil),
-            .init(label: "iPad Screenshots", value: ipadScreenshots != nil ? "\(ipadCount) screenshot(s)" : nil),
             .init(label: "Privacy Nutrition Labels", value: nil, required: false, actionUrl: privacyUrl),
             .init(label: "Build", value: builds.first?.attributes.version),
         ])

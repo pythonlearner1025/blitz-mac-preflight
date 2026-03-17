@@ -3,8 +3,9 @@ import SwiftUI
 struct SidebarView: View {
     @Bindable var appState: AppState
 
-    private func projectIcon(_ type: ProjectType) -> String {
-        switch type {
+    private func projectIcon(_ project: Project) -> String {
+        if project.platform == .macOS { return "desktopcomputer" }
+        switch project.type {
         case .reactNative: return "atom"
         case .swift: return "swift"
         case .flutter: return "bird"
@@ -17,7 +18,7 @@ struct SidebarView: View {
             if let project = appState.activeProject {
                 Section {
                     HStack(spacing: 8) {
-                        Image(systemName: projectIcon(project.type))
+                        Image(systemName: projectIcon(project))
                             .foregroundStyle(.blue)
                             .font(.system(size: 14))
                         Text(project.name)

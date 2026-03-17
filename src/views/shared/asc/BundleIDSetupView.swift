@@ -5,6 +5,7 @@ import SwiftUI
 struct BundleIDSetupView: View {
     var asc: ASCManager
     var tab: AppTab
+    var platform: ProjectPlatform = .iOS
 
     enum Phase {
         case form       // Step 1: fill out org + app name + capabilities
@@ -399,7 +400,8 @@ struct BundleIDSetupView: View {
                 if let existing = try await service.fetchBundleId(identifier: bundleId) {
                     resourceId = existing.id
                 } else {
-                    let created = try await service.registerBundleId(identifier: bundleId, name: bundleName)
+                    let bundleIdPlatform = platform == .macOS ? "MAC_OS" : "IOS"
+                    let created = try await service.registerBundleId(identifier: bundleId, name: bundleName, platform: bundleIdPlatform)
                     resourceId = created.id
                 }
 

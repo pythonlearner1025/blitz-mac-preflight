@@ -5,6 +5,7 @@ struct NewProjectSheet: View {
     @Binding var isPresented: Bool
 
     @State private var projectName = ""
+    @State private var platform: ProjectPlatform = .iOS
     @State private var projectType: ProjectType = .reactNative
     @State private var errorMessage: String?
 
@@ -16,9 +17,27 @@ struct NewProjectSheet: View {
             Form {
                 TextField("Project Name", text: $projectName)
 
-                Picker("Type", selection: $projectType) {
-                    Text("React Native").tag(ProjectType.reactNative)
-                    Text("Swift").tag(ProjectType.swift)
+                Picker("Platform", selection: $platform) {
+                    Text("iOS").tag(ProjectPlatform.iOS)
+                    Text("macOS").tag(ProjectPlatform.macOS)
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: platform) { _, newPlatform in
+                    // macOS only supports Swift for now
+                    if newPlatform == .macOS {
+                        projectType = .swift
+                    }
+                }
+
+                if platform == .iOS {
+                    Picker("Type", selection: $projectType) {
+                        Text("React Native").tag(ProjectType.reactNative)
+                        Text("Swift").tag(ProjectType.swift)
+                    }
+                } else {
+                    Picker("Type", selection: $projectType) {
+                        Text("Swift").tag(ProjectType.swift)
+                    }
                 }
             }
             .formStyle(.grouped)
@@ -53,6 +72,7 @@ struct NewProjectSheet: View {
         let metadata = BlitzProjectMetadata(
             name: projectName,
             type: projectType,
+            platform: platform,
             createdAt: Date(),
             lastOpenedAt: Date()
         )

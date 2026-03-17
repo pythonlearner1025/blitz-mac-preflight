@@ -35,7 +35,8 @@ struct ContentView: View {
             projectId: project.id,
             projectName: project.name,
             projectPath: project.path,
-            projectType: project.type
+            projectType: project.type,
+            platform: project.platform
         )
     }
 

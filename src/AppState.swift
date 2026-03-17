@@ -331,29 +331,36 @@ final class ProjectSetupManager {
     var pendingSetupProjectId: String?
 
     /// Scaffold a project using the appropriate template for its type.
-    func setup(projectId: String, projectName: String, projectPath: String, projectType: ProjectType = .reactNative) async {
+    func setup(projectId: String, projectName: String, projectPath: String, projectType: ProjectType = .reactNative, platform: ProjectPlatform = .iOS) async {
         isSettingUp = true
         setupProjectId = projectId
         currentStep = nil
         errorMessage = nil
 
         do {
-            switch projectType {
-            case .swift:
+            switch (projectType, platform) {
+            case (.swift, .macOS):
+                try await MacSwiftProjectSetupService.setup(
+                    projectId: projectId,
+                    projectName: projectName,
+                    projectPath: projectPath,
+                    onStep: { step in self.currentStep = step }
+                )
+            case (.swift, .iOS):
                 try await SwiftProjectSetupService.setup(
                     projectId: projectId,
                     projectName: projectName,
                     projectPath: projectPath,
                     onStep: { step in self.currentStep = step }
                 )
-            case .reactNative:
+            case (.reactNative, _):
                 try await ProjectSetupService.setup(
                     projectId: projectId,
                     projectName: projectName,
                     projectPath: projectPath,
                     onStep: { step in self.currentStep = step }
                 )
-            case .flutter:
+            case (.flutter, _):
                 throw ProjectSetupService.SetupError(message: "Flutter projects are not yet supported")
             }
             // Ensure .mcp.json, CLAUDE.md, .claude/settings.local.json exist

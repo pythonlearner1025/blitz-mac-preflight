@@ -49,7 +49,7 @@ struct AppDetailsView: View {
             projectId: appState.activeProjectId ?? "",
             bundleId: appState.activeProject?.metadata.bundleIdentifier
         ) {
-            ASCTabContent(asc: asc, tab: .appDetails) {
+            ASCTabContent(asc: asc, tab: .appDetails, platform: appState.activeProject?.platform ?? .iOS) {
                 detailsContent
             }
         }

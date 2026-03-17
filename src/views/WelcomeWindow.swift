@@ -127,7 +127,7 @@ struct WelcomeWindow: View {
                             selectProject(project)
                         } label: {
                             HStack(spacing: 10) {
-                                Image(systemName: projectIcon(project.type))
+                                Image(systemName: projectIcon(project))
                                     .foregroundStyle(.secondary)
                                     .frame(width: 20)
 
@@ -213,8 +213,9 @@ struct WelcomeWindow: View {
         }
     }
 
-    private func projectIcon(_ type: ProjectType) -> String {
-        switch type {
+    private func projectIcon(_ project: Project) -> String {
+        if project.platform == .macOS { return "desktopcomputer" }
+        switch project.type {
         case .reactNative: return "atom"
         case .swift: return "swift"
         case .flutter: return "bird"

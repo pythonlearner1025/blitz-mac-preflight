@@ -394,9 +394,12 @@ actor MCPToolExecutor {
         try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
 
         let projectType = ProjectType(rawValue: typeStr) ?? .reactNative
+        let platformStr = args["platform"] as? String
+        let platform = ProjectPlatform(rawValue: platformStr ?? "iOS") ?? .iOS
         let metadata = BlitzProjectMetadata(
             name: name,
             type: projectType,
+            platform: platform,
             createdAt: Date(),
             lastOpenedAt: Date()
         )
@@ -424,7 +427,8 @@ actor MCPToolExecutor {
                 projectId: project.id,
                 projectName: project.name,
                 projectPath: project.path,
-                projectType: project.type
+                projectType: project.type,
+                platform: project.platform
             )
         } else {
             // Wait for setup to finish (up to 3 min)
@@ -699,6 +703,12 @@ actor MCPToolExecutor {
             for (field, value) in fieldMap {
                 if field == "demoAccountRequired" {
                     attrs[field] = value == "true"
+                } else if field == "contactPhone" {
+                    // ASC requires phone as +<digits only> — strip dashes, spaces, parens
+                    let stripped = value.hasPrefix("+")
+                        ? "+" + value.dropFirst().filter(\.isNumber)
+                        : value.filter(\.isNumber)
+                    attrs[field] = stripped
                 } else {
                     attrs[field] = value
                 }
@@ -1077,10 +1087,14 @@ actor MCPToolExecutor {
                 "fields": fields,
                 "missingRequired": readiness.missingRequired.map { $0.label }
             ] as [String: Any],
-            "totalVersions": asc.appStoreVersions.count
+            "totalVersions": asc.appStoreVersions.count,
+            "isSubmitting": asc.isSubmitting
         ]
         if let v = asc.appStoreVersions.first {
             r["latestVersion"] = ["id": v.id, "versionString": v.attributes.versionString, "state": v.attributes.appStoreState ?? "unknown"] as [String: Any]
+        }
+        if let error = asc.submissionError {
+            r["submissionError"] = error
         }
         return r
     }
@@ -1248,12 +1262,14 @@ actor MCPToolExecutor {
         let appStateRef = appState
         do {
             // Run with 5-minute overall timeout to prevent silent hangs
+            let projectPlatform = await MainActor.run { project.platform }
             let result = try await withThrowingTimeout(seconds: 300) {
                 try await pipeline.setupSigning(
                     projectPath: project.path,
                     bundleId: bundleId,
                     teamId: teamId,
                     ascService: service,
+                    platform: projectPlatform,
                     onProgress: { msg in
                         Task { @MainActor in
                             appStateRef.ascManager.buildPipelineMessage = msg
@@ -1277,14 +1293,18 @@ actor MCPToolExecutor {
                 appState.ascManager.buildPipelineMessage = ""
             }
 
-            return mcpJSON([
+            var resultDict: [String: Any] = [
                 "success": true,
                 "bundleIdResourceId": result.bundleIdResourceId,
                 "certificateId": result.certificateId,
                 "profileUUID": result.profileUUID,
                 "teamId": result.teamId,
                 "log": result.log
-            ] as [String: Any])
+            ]
+            if let installerCertId = result.installerCertificateId {
+                resultDict["installerCertificateId"] = installerCertId
+            }
+            return mcpJSON(resultDict)
         } catch {
             await MainActor.run {
                 appState.ascManager.buildPipelinePhase = .idle
@@ -1312,12 +1332,14 @@ actor MCPToolExecutor {
         let pipeline = BuildPipelineService()
         let appStateRef = appState
         do {
+            let buildPlatform = await MainActor.run { project.platform }
             let result = try await pipeline.buildIPA(
                 projectPath: project.path,
                 bundleId: bundleId,
                 teamId: teamId,
                 scheme: scheme,
                 configuration: configuration,
+                platform: buildPlatform,
                 onProgress: { msg in
                     Task { @MainActor in
                         // Detect phase transitions from build output
@@ -1371,16 +1393,18 @@ actor MCPToolExecutor {
                     let bDate = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
                     return aDate > bDate
                 }
-            var foundIPA: String?
+            // Search for .ipa (iOS) or .pkg (macOS)
+            let searchExts: Set<String> = ["ipa", "pkg"]
+            var foundArtifact: String?
             for dir in exportDirs {
                 let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
-                if let ipa = files.first(where: { $0.pathExtension == "ipa" }) {
-                    foundIPA = ipa.path
+                if let match = files.first(where: { searchExts.contains($0.pathExtension) }) {
+                    foundArtifact = match.path
                     break
                 }
             }
-            guard let found = foundIPA else {
-                return mcpText("Error: no IPA path provided and no recent build found. Run app_store_build first.")
+            guard let found = foundArtifact else {
+                return mcpText("Error: no IPA/PKG path provided and no recent build found. Run app_store_build first.")
             }
             ipaPath = found
         }
@@ -1395,9 +1419,11 @@ actor MCPToolExecutor {
         let appId = await MainActor.run { appState.ascManager.app?.id }
         let service = await MainActor.run { appState.ascManager.service }
 
-        // --- Pre-upload validation: build version & encryption key ---
+        // --- Pre-upload validation: build version & encryption key (IPA only, skip for PKG) ---
+        let isIPA = ipaPath.hasSuffix(".ipa")
         var existingVersions: Set<String> = []
         do {
+            guard isIPA else { throw NSError(domain: "skip", code: 0) }
             // Extract IPA plist fields in one pass
             let plistXML = try await ProcessRunner.run(
                 "/bin/bash",
@@ -1456,6 +1482,7 @@ actor MCPToolExecutor {
         let appStateRef = appState
         do {
             // Always skip BuildPipelineService's built-in polling — we poll ourselves below
+            let uploadPlatform = await MainActor.run { appState.activeProject?.platform ?? .iOS }
             let result = try await pipeline.uploadToTestFlight(
                 ipaPath: ipaPath,
                 keyId: credentials.keyId,
@@ -1464,6 +1491,7 @@ actor MCPToolExecutor {
                 appId: appId,
                 ascService: service,
                 skipPolling: true,
+                platform: uploadPlatform,
                 onProgress: { msg in
                     Task { @MainActor in
                         appStateRef.ascManager.buildPipelineMessage = String(msg.prefix(120))

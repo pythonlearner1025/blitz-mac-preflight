@@ -6,12 +6,12 @@ struct ProjectListView: View {
     var body: some View {
         ForEach(appState.projectManager.projects) { project in
             HStack {
-                Image(systemName: projectIcon(project.type))
+                Image(systemName: projectIcon(project))
                     .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(project.name)
                         .font(.system(size: 12, weight: .medium))
-                    Text(project.type.rawValue)
+                    Text(project.platform == .macOS ? "macOS \(project.type.rawValue)" : project.type.rawValue)
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 }
@@ -30,8 +30,9 @@ struct ProjectListView: View {
         }
     }
 
-    private func projectIcon(_ type: ProjectType) -> String {
-        switch type {
+    private func projectIcon(_ project: Project) -> String {
+        if project.platform == .macOS { return "desktopcomputer" }
+        switch project.type {
         case .reactNative: return "atom"
         case .swift: return "swift"
         case .flutter: return "bird"

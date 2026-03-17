@@ -131,7 +131,8 @@ Upload screenshots to App Store Connect.
 ```json
 { "screenshotPaths": ["/tmp/screen1.png"], "displayType": "APP_IPHONE_67", "locale": "en-US" }
 ```
-Required display types: APP_IPHONE_67 (mandatory), APP_IPAD_PRO_3GEN_129 (mandatory for all apps).
+Required display types for iOS: APP_IPHONE_67 (mandatory), APP_IPAD_PRO_3GEN_129 (mandatory).
+Required display type for macOS: APP_DESKTOP (1280x800, 1440x900, 2560x1600, or 2880x1800 at 16:10 ratio).
 
 ### asc_open_submit_preview
 
@@ -139,7 +140,7 @@ No arguments. Checks all required fields and either opens the Submit for Review 
 
 ### app_store_setup_signing
 
-Set up iOS code signing for App Store distribution. Idempotent — re-running skips already-completed steps.
+Set up code signing for App Store distribution (iOS or macOS — auto-detected from project). Idempotent — re-running skips already-completed steps. For macOS, also creates MAC_INSTALLER_DISTRIBUTION certificate for .pkg signing.
 
 | param | type | required | notes |
 |---|---|---|---|
@@ -209,7 +210,7 @@ Create an auto-renewable subscription. Creates or reuses a subscription group.
     - `asc_fill_form` tab `"monetization"` — isFree (use `asc_set_app_price` for paid pricing)
     - `asc_fill_form` tab `"review.ageRating"` — set all applicable content descriptors
     - `asc_fill_form` tab `"review.contact"` — contactFirstName, contactLastName, contactEmail, contactPhone
-    - `asc_upload_screenshots` — upload for APP_IPHONE_67 and APP_IPAD_PRO_3GEN_129 display types
+    - `asc_upload_screenshots` — upload for APP_IPHONE_67/APP_IPAD_PRO_3GEN_129 (iOS) or APP_DESKTOP (macOS)
     - Re-check `get_tab_state` tab `"ascOverview"` to confirm all required fields are filled
 3. **Manual step:** Tell the user to set Privacy Nutrition Labels manually in [App Store Connect](https://appstoreconnect.apple.com) — this is not exposed in Apple's REST API
 4. `app_store_setup_signing` teamId=YOUR_TEAM_ID (one-time per bundle ID)

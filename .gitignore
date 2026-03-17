@@ -53,3 +53,6 @@ yarn-error.log
 compose.dev.yaml
 .aibox
 .idea/workspace.xml
+
+.aibox
+compose.dev.yaml

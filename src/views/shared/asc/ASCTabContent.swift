@@ -4,6 +4,7 @@ import SwiftUI
 struct ASCTabContent<Content: View>: View {
     var asc: ASCManager
     var tab: AppTab
+    var platform: ProjectPlatform = .iOS
     @ViewBuilder var content: () -> Content
 
     var body: some View {
@@ -17,7 +18,7 @@ struct ASCTabContent<Content: View>: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if asc.app == nil && asc.credentials != nil {
             // App not found — show bundle ID setup instead of flashing content
-            BundleIDSetupView(asc: asc, tab: tab)
+            BundleIDSetupView(asc: asc, tab: tab, platform: platform)
         } else if let error = asc.tabError[tab] {
             VStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle")

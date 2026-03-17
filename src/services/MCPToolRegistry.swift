@@ -67,7 +67,8 @@ enum MCPToolRegistry {
             description: "Create a new Blitz project",
             properties: [
                 "name": ["type": "string", "description": "Project name"],
-                "type": ["type": "string", "description": "Project type (blitz, react-native, flutter, swift)", "enum": ["blitz", "react-native", "flutter", "swift"]]
+                "type": ["type": "string", "description": "Project type (blitz, react-native, flutter, swift)", "enum": ["blitz", "react-native", "flutter", "swift"]],
+                "platform": ["type": "string", "description": "Target platform (iOS or macOS). Defaults to iOS.", "enum": ["iOS", "macOS"]]
             ],
             required: ["name", "type"]
         ))
@@ -77,7 +78,8 @@ enum MCPToolRegistry {
             description: "Import an existing project from a path",
             properties: [
                 "path": ["type": "string", "description": "Absolute path to project"],
-                "type": ["type": "string", "description": "Project type", "enum": ["blitz", "react-native", "flutter", "swift"]]
+                "type": ["type": "string", "description": "Project type", "enum": ["blitz", "react-native", "flutter", "swift"]],
+                "platform": ["type": "string", "description": "Target platform (iOS or macOS). Defaults to iOS.", "enum": ["iOS", "macOS"]]
             ],
             required: ["path", "type"]
         ))
@@ -183,7 +185,7 @@ enum MCPToolRegistry {
                     "type": "array",
                     "items": ["type": "string"]
                 ] as [String: Any],
-                "displayType": ["type": "string", "description": "Display type", "enum": ["APP_IPHONE_67", "APP_IPAD_PRO_3GEN_129"]],
+                "displayType": ["type": "string", "description": "Display type (use APP_DESKTOP for macOS apps)", "enum": ["APP_IPHONE_67", "APP_IPAD_PRO_3GEN_129", "APP_DESKTOP"]],
                 "locale": ["type": "string", "description": "e.g. en-US"]
             ],
             required: ["screenshotPaths", "displayType"]
@@ -243,7 +245,7 @@ enum MCPToolRegistry {
         // -- Build Pipeline --
         tools.append(tool(
             name: "app_store_setup_signing",
-            description: "Set up iOS code signing: registers bundle ID, creates distribution certificate, installs provisioning profile, and configures the Xcode project. Idempotent — re-running skips completed steps.",
+            description: "Set up code signing for iOS or macOS: registers bundle ID, creates distribution certificate (and installer certificate for macOS), installs provisioning profile, and configures the Xcode project. Automatically detects platform from project metadata. Idempotent — re-running skips completed steps.",
             properties: [
                 "teamId": ["type": "string", "description": "Apple Developer Team ID (optional if already saved in project metadata)"]
             ],

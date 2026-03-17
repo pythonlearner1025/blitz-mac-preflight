@@ -33,6 +33,7 @@ actor BuildPipelineService {
     struct SigningState: Codable {
         var bundleIdResourceId: String?
         var certificateId: String?
+        var installerCertificateId: String?
         var profileUUID: String?
         var profileName: String?
         var teamId: String?
@@ -65,6 +66,7 @@ actor BuildPipelineService {
     struct SigningResult {
         let bundleIdResourceId: String
         let certificateId: String
+        let installerCertificateId: String?
         let profileUUID: String
         let teamId: String
         let log: [String]
@@ -75,14 +77,24 @@ actor BuildPipelineService {
         bundleId: String,
         teamId: String?,
         ascService: AppStoreConnectService,
+        platform: ProjectPlatform = .iOS,
         onProgress: @escaping @Sendable (String) -> Void
     ) async throws -> SigningResult {
         var state = loadSigningState(bundleId: bundleId)
         var log: [String] = []
 
+        let isMacOS = platform == .macOS
+        let certType = isMacOS ? "MAC_APP_DISTRIBUTION" : "DISTRIBUTION"
+        let bundleIdPlatform = isMacOS ? "MAC_OS" : "IOS"
+        let profileType = isMacOS ? "MAC_APP_STORE" : "IOS_APP_STORE"
+
         func emit(_ msg: String) {
             log.append(msg)
             onProgress(msg)
+        }
+
+        if isMacOS {
+            emit("Setting up macOS App Store signing...")
         }
 
         // 1. Register bundle ID
@@ -96,9 +108,9 @@ actor BuildPipelineService {
                 emit("Bundle ID exists: \(found.id)")
                 bundleIdResourceId = found.id
             } else {
-                emit("Registering bundle ID...")
+                emit("Registering bundle ID (platform: \(bundleIdPlatform))...")
                 let appName = bundleId.split(separator: ".").last.map(String.init) ?? bundleId
-                let created = try await ascService.registerBundleId(identifier: bundleId, name: appName)
+                let created = try await ascService.registerBundleId(identifier: bundleId, name: appName, platform: bundleIdPlatform)
                 emit("Registered bundle ID: \(created.id)")
                 bundleIdResourceId = created.id
             }
@@ -107,90 +119,92 @@ actor BuildPipelineService {
         }
 
         // 2. Distribution certificate
+        // For macOS: prefer existing universal DISTRIBUTION cert (Apple Distribution) since
+        // Xcode uses it by default. Only fall back to MAC_APP_DISTRIBUTION if none found.
         let certificateId: String
         if let existing = state.certificateId {
-            emit("Distribution certificate already configured: \(existing)")
+            emit("\(certType) certificate already configured: \(existing)")
             certificateId = existing
         } else {
-            emit("Checking distribution certificates...")
-            let certs = try await ascService.fetchDistributionCertificates()
-            if let cert = certs.first {
-                emit("Using existing certificate: \(cert.attributes.displayName ?? cert.id)")
+            var foundCert: ASCCertificate?
+
+            // For macOS, first check for universal DISTRIBUTION cert (Apple Distribution)
+            if isMacOS {
+                emit("Checking DISTRIBUTION (Apple Distribution) certificates...")
+                let universalCerts = try await ascService.fetchCertificates(type: "DISTRIBUTION")
+                foundCert = universalCerts.first
+                if let cert = foundCert {
+                    emit("Using existing Apple Distribution certificate: \(cert.attributes.displayName ?? cert.id)")
+                }
+            }
+
+            // Check platform-specific cert type
+            if foundCert == nil {
+                emit("Checking \(certType) certificates...")
+                let certs = try await ascService.fetchCertificates(type: certType)
+                foundCert = certs.first
+                if let cert = foundCert {
+                    emit("Using existing certificate: \(cert.attributes.displayName ?? cert.id)")
+                }
+            }
+
+            if let cert = foundCert {
                 certificateId = cert.id
             } else {
-                emit("No distribution certificate found. Creating one...")
-                let signingDir = BlitzPaths.signing(bundleId: bundleId)
-                try fm.createDirectory(at: signingDir, withIntermediateDirectories: true)
-
-                let keyPath = signingDir.appendingPathComponent("dist.key").path
-                let csrPath = signingDir.appendingPathComponent("dist.csr").path
-
-                // Generate private key
-                try await ProcessRunner.run("openssl", arguments: [
-                    "genrsa", "-out", keyPath, "2048"
-                ], timeout: 30)
-                emit("Generated RSA private key")
-                try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: keyPath)
-
-                // Generate CSR
-                try await ProcessRunner.run("openssl", arguments: [
-                    "req", "-new", "-key", keyPath, "-out", csrPath,
-                    "-subj", "/CN=Blitz Distribution/O=Blitz/C=US"
-                ], timeout: 30)
-                let csrContent = try String(contentsOfFile: csrPath, encoding: .utf8)
-                emit("Generated CSR")
-
-                // Create certificate via API
-                let cert = try await ascService.createCertificate(csrContent: csrContent)
-                emit("Created distribution certificate: \(cert.id)")
-
-                // Decode certificate content and import to keychain
-                if let certBase64 = cert.attributes.certificateContent,
-                   let certData = Data(base64Encoded: certBase64) {
-                    let derPath = signingDir.appendingPathComponent("dist.cer").path
-                    try certData.write(to: URL(fileURLWithPath: derPath))
-
-                    // Convert DER to PEM
-                    let pemPath = signingDir.appendingPathComponent("dist.pem").path
-                    try await ProcessRunner.run("openssl", arguments: [
-                        "x509", "-inform", "DER", "-in", derPath, "-out", pemPath
-                    ], timeout: 30)
-
-                    // Create p12 for keychain import
-                    let p12Path = signingDir.appendingPathComponent("dist.p12").path
-                    try await ProcessRunner.run("openssl", arguments: [
-                        "pkcs12", "-export", "-legacy",
-                        "-inkey", keyPath, "-in", pemPath,
-                        "-out", p12Path, "-passout", "pass:"
-                    ], timeout: 30)
-                    try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: p12Path)
-
-                    // Import to keychain
-                    try await ProcessRunner.run("security", arguments: [
-                        "import", p12Path, "-k",
-                        fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Keychains/login.keychain-db").path,
-                        "-P", "", "-T", "/usr/bin/codesign",
-                        "-T", "/usr/bin/security"
-                    ], timeout: 30)
-                    emit("Imported certificate to keychain")
-                }
-
-                certificateId = cert.id
+                emit("No distribution certificate found. Creating \(certType)...")
+                certificateId = try await createAndImportCertificate(
+                    bundleId: bundleId,
+                    certType: certType,
+                    filePrefix: "dist",
+                    csrCN: isMacOS ? "Mac App Distribution" : "Blitz Distribution",
+                    ascService: ascService,
+                    emit: emit
+                )
             }
             state.certificateId = certificateId
             try saveSigningState(state, bundleId: bundleId)
         }
 
+        // 2b. macOS Installer certificate (for signing .pkg)
+        if isMacOS {
+            if let existing = state.installerCertificateId {
+                emit("MAC_INSTALLER_DISTRIBUTION certificate already configured: \(existing)")
+            } else {
+                emit("Checking MAC_INSTALLER_DISTRIBUTION certificates...")
+                let certs = try await ascService.fetchCertificates(type: "MAC_INSTALLER_DISTRIBUTION")
+                if let cert = certs.first {
+                    emit("Using existing installer certificate: \(cert.attributes.displayName ?? cert.id)")
+                    state.installerCertificateId = cert.id
+                } else {
+                    emit("No MAC_INSTALLER_DISTRIBUTION certificate found. Creating one...")
+                    let installerCertId = try await createAndImportCertificate(
+                        bundleId: bundleId,
+                        certType: "MAC_INSTALLER_DISTRIBUTION",
+                        filePrefix: "installer",
+                        csrCN: "Mac Installer Distribution",
+                        ascService: ascService,
+                        emit: emit
+                    )
+                    state.installerCertificateId = installerCertId
+                }
+                try saveSigningState(state, bundleId: bundleId)
+            }
+        }
+
         // 3. Provisioning profile
         let profileUUID: String
-        if let existing = state.profileUUID {
+        let profileExt = isMacOS ? "provisionprofile" : "mobileprovision"
+        let profilesDir = fm.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/MobileDevice/Provisioning Profiles")
+
+        if let existing = state.profileUUID,
+           fm.fileExists(atPath: profilesDir.appendingPathComponent("\(existing).\(profileExt)").path) {
             emit("Provisioning profile already installed: \(existing)")
             profileUUID = existing
 
             // Recover team ID from installed profile if missing
             if state.teamId == nil && teamId == nil {
-                let profilePath = fm.homeDirectoryForCurrentUser
-                    .appendingPathComponent("Library/MobileDevice/Provisioning Profiles/\(existing).mobileprovision").path
+                let profilePath = profilesDir.appendingPathComponent("\(existing).\(profileExt)").path
                 if let extractedTeamId = Self.extractTeamId(from: profilePath) {
                     state.teamId = extractedTeamId
                     try saveSigningState(state, bundleId: bundleId)
@@ -198,13 +212,37 @@ actor BuildPipelineService {
                 }
             }
         } else {
-            emit("Creating provisioning profile...")
-            let profileName = "\(bundleId) App Store"
-            let profile = try await ascService.createProfile(
-                name: profileName,
-                bundleIdResourceId: bundleIdResourceId,
-                certificateId: certificateId
-            )
+            if state.profileUUID != nil {
+                emit("Provisioning profile missing from disk, re-downloading...")
+                state.profileUUID = nil
+                state.profileName = nil
+                try saveSigningState(state, bundleId: bundleId)
+            }
+            emit("Creating provisioning profile (type: \(profileType))...")
+            let profileName = "\(bundleId) \(isMacOS ? "Mac " : "")App Store"
+            let profile: ASCProfile
+            do {
+                profile = try await ascService.createProfile(
+                    name: profileName,
+                    bundleIdResourceId: bundleIdResourceId,
+                    certificateId: certificateId,
+                    profileType: profileType
+                )
+            } catch let ascErr as ASCError where ascErr.isConflict {
+                // Duplicate profile name — delete existing and retry
+                emit("Profile name conflict. Deleting existing duplicates...")
+                let existing = try await ascService.fetchProfiles(name: profileName)
+                for old in existing {
+                    try? await ascService.deleteProfile(id: old.id)
+                    emit("Deleted duplicate profile: \(old.id)")
+                }
+                profile = try await ascService.createProfile(
+                    name: profileName,
+                    bundleIdResourceId: bundleIdResourceId,
+                    certificateId: certificateId,
+                    profileType: profileType
+                )
+            }
             emit("Created profile: \(profile.attributes.name)")
 
             // Decode and install the profile
@@ -214,10 +252,8 @@ actor BuildPipelineService {
                 // Extract UUID from the profile plist
                 let uuid = profile.attributes.uuid ?? UUID().uuidString
 
-                let profilesDir = fm.homeDirectoryForCurrentUser
-                    .appendingPathComponent("Library/MobileDevice/Provisioning Profiles")
                 try fm.createDirectory(at: profilesDir, withIntermediateDirectories: true)
-                let profilePath = profilesDir.appendingPathComponent("\(uuid).mobileprovision")
+                let profilePath = profilesDir.appendingPathComponent("\(uuid).\(profileExt)")
                 try profileData.write(to: profilePath)
                 emit("Installed profile at: \(profilePath.path)")
                 profileUUID = uuid
@@ -258,10 +294,85 @@ actor BuildPipelineService {
         return SigningResult(
             bundleIdResourceId: bundleIdResourceId,
             certificateId: certificateId,
+            installerCertificateId: state.installerCertificateId,
             profileUUID: profileUUID,
             teamId: resolvedTeamId,
             log: log
         )
+    }
+
+    /// Generate a CSR, create a certificate via ASC API, and import to keychain.
+    private func createAndImportCertificate(
+        bundleId: String,
+        certType: String,
+        filePrefix: String,
+        csrCN: String,
+        ascService: AppStoreConnectService,
+        emit: (String) -> Void
+    ) async throws -> String {
+        let signingDir = BlitzPaths.signing(bundleId: bundleId)
+        try fm.createDirectory(at: signingDir, withIntermediateDirectories: true)
+
+        let keyPath = signingDir.appendingPathComponent("\(filePrefix).key").path
+        let csrPath = signingDir.appendingPathComponent("\(filePrefix).csr").path
+
+        // Generate private key
+        try await ProcessRunner.run("openssl", arguments: [
+            "genrsa", "-out", keyPath, "2048"
+        ], timeout: 30)
+        emit("Generated RSA private key (\(filePrefix))")
+        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: keyPath)
+
+        // Generate CSR
+        try await ProcessRunner.run("openssl", arguments: [
+            "req", "-new", "-key", keyPath, "-out", csrPath,
+            "-subj", "/CN=\(csrCN)/O=Blitz/C=US"
+        ], timeout: 30)
+        let csrContent = try String(contentsOfFile: csrPath, encoding: .utf8)
+        emit("Generated CSR (\(filePrefix))")
+
+        // Create certificate via API
+        let cert = try await ascService.createCertificate(csrContent: csrContent, type: certType)
+        emit("Created \(certType) certificate: \(cert.id)")
+
+        // Decode certificate content and import to keychain
+        if let certBase64 = cert.attributes.certificateContent,
+           let certData = Data(base64Encoded: certBase64) {
+            let derPath = signingDir.appendingPathComponent("\(filePrefix).cer").path
+            try certData.write(to: URL(fileURLWithPath: derPath))
+
+            // Convert DER to PEM
+            let pemPath = signingDir.appendingPathComponent("\(filePrefix).pem").path
+            try await ProcessRunner.run("openssl", arguments: [
+                "x509", "-inform", "DER", "-in", derPath, "-out", pemPath
+            ], timeout: 30)
+
+            // Create p12 for keychain import — use legacy algorithms (PBE-SHA1-3DES)
+            // and a real password; OpenSSL 3.x defaults to AES-256-CBC which macOS
+            // security cannot import, and empty passwords also fail.
+            let p12Path = signingDir.appendingPathComponent("\(filePrefix).p12").path
+            let p12Pass = "blitz-\(bundleId.hashValue & 0x7FFFFFFF)"
+            try await ProcessRunner.run("openssl", arguments: [
+                "pkcs12", "-export",
+                "-inkey", keyPath, "-in", pemPath,
+                "-out", p12Path, "-passout", "pass:\(p12Pass)",
+                "-certpbe", "PBE-SHA1-3DES",
+                "-keypbe", "PBE-SHA1-3DES",
+                "-macalg", "SHA1"
+            ], timeout: 30)
+            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: p12Path)
+
+            // Import to keychain
+            try await ProcessRunner.run("security", arguments: [
+                "import", p12Path, "-k",
+                fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Keychains/login.keychain-db").path,
+                "-P", p12Pass, "-T", "/usr/bin/codesign",
+                "-T", "/usr/bin/security"
+            ], timeout: 30)
+            emit("Imported \(certType) certificate to keychain")
+        }
+
+        return cert.id
     }
 
     /// Extract TeamIdentifier from an installed .mobileprovision file using `security cms`
@@ -289,7 +400,7 @@ actor BuildPipelineService {
     /// Update only PRODUCT_BUNDLE_IDENTIFIER in the project's pbxproj.
     /// Public so it can be called from MCPToolExecutor when the user changes bundle ID.
     func updateBundleIdInPbxproj(projectPath: String, bundleId: String) {
-        let projectURL = URL(fileURLWithPath: projectPath)
+        let projectURL = URL(fileURLWithPath: projectPath).resolvingSymlinksInPath()
         var searchDirs = [projectURL]
         for name in ["ios", "macos", "apple"] {
             let sub = projectURL.appendingPathComponent(name)
@@ -319,7 +430,7 @@ actor BuildPipelineService {
 
     private func configurePbxproj(projectPath: String, teamId: String, bundleId: String) async throws {
         // Find .xcodeproj in root or common subdirectories
-        let projectURL = URL(fileURLWithPath: projectPath)
+        let projectURL = URL(fileURLWithPath: projectPath).resolvingSymlinksInPath()
         var searchDirs = [projectURL]
         for name in ["ios", "macos", "apple"] {
             let sub = projectURL.appendingPathComponent(name)
@@ -399,7 +510,7 @@ actor BuildPipelineService {
     // MARK: - Build IPA
 
     struct BuildResult {
-        let ipaPath: String
+        let ipaPath: String  // .ipa for iOS, .pkg for macOS
         let archivePath: String
         let log: [String]
     }
@@ -410,6 +521,7 @@ actor BuildPipelineService {
         teamId: String,
         scheme: String?,
         configuration: String?,
+        platform: ProjectPlatform = .iOS,
         onProgress: @escaping @Sendable (String) -> Void
     ) async throws -> BuildResult {
         var log: [String] = []
@@ -419,7 +531,7 @@ actor BuildPipelineService {
             onProgress(msg)
         }
 
-        let projectURL = URL(fileURLWithPath: projectPath)
+        let projectURL = URL(fileURLWithPath: projectPath).resolvingSymlinksInPath().resolvingSymlinksInPath()
 
         // Search for workspace/project in root and common subdirectories (ios/, macos/, etc.)
         let searchDirs: [URL] = {
@@ -520,25 +632,25 @@ actor BuildPipelineService {
             )
         }
 
-        // Archive — use manual distribution signing so Xcode 26 produces a
-        // distribution-type archive that can be exported for App Store.
+        let isMac = platform == .macOS
+
+        // Archive with automatic/dev signing — no signing overrides on the command line,
+        // because xcodebuild build settings apply globally to ALL targets including SPM
+        // dependencies, which don't support provisioning profiles or manual signing.
+        // The exportArchive step below re-signs with distribution cert + profile.
         let archivePath = NSTemporaryDirectory() + "BlitzArchive-\(Int(Date().timeIntervalSince1970)).xcarchive"
-        var archiveArgs = [
+        let destination = isMac ? "generic/platform=macOS" : "generic/platform=iOS"
+        let archiveArgs = [
             useWorkspace ? "-workspace" : "-project",
             buildTarget,
             "-scheme", resolvedScheme,
             "-configuration", config,
-            "-destination", "generic/platform=iOS",
+            "-destination", destination,
             "-archivePath", archivePath,
             "archive",
-            "CODE_SIGN_STYLE=Manual",
-            "CODE_SIGN_IDENTITY=Apple Distribution",
             "DEVELOPMENT_TEAM=\(teamId)",
             "PRODUCT_BUNDLE_IDENTIFIER=\(bundleId)"
         ]
-        if !profileRef.isEmpty {
-            archiveArgs.append("PROVISIONING_PROFILE_SPECIFIER=\(profileRef)")
-        }
 
         let archiveStderr = StderrCollector()
         let managed = ProcessRunner.stream(
@@ -573,15 +685,21 @@ actor BuildPipelineService {
         emit("Archive succeeded: \(archivePath)")
 
         // Generate ExportOptions.plist
+        // app-store-connect produces a .pkg for macOS; app-store produces an .ipa for iOS
         let exportOptionsPath = NSTemporaryDirectory() + "ExportOptions-\(Int(Date().timeIntervalSince1970)).plist"
         var exportOptions: [String: Any] = [
-            "method": "app-store",
+            "method": isMac ? "app-store-connect" : "app-store",
             "teamID": teamId,
             "signingStyle": "manual",
+            "signingCertificate": "Apple Distribution",
             "uploadSymbols": true
         ]
         if !profileRef.isEmpty {
             exportOptions["provisioningProfiles"] = [bundleId: profileRef]
+        }
+        if isMac {
+            // installerSigningCertificate tells xcodebuild to produce a signed .pkg
+            exportOptions["installerSigningCertificate"] = "3rd Party Mac Developer Installer"
         }
         let plistData = try PropertyListSerialization.data(
             fromPropertyList: exportOptions,
@@ -647,21 +765,22 @@ actor BuildPipelineService {
             )
         }
 
-        // Find the IPA
+        // Find the exported artifact (.pkg for macOS, .ipa for iOS)
         let exportedFiles = try fm.contentsOfDirectory(at: URL(fileURLWithPath: exportPath),
                                                         includingPropertiesForKeys: nil)
-        guard let ipaURL = exportedFiles.first(where: { $0.pathExtension == "ipa" }) else {
+        let expectedExt = isMac ? "pkg" : "ipa"
+        guard let artifactURL = exportedFiles.first(where: { $0.pathExtension == expectedExt }) else {
             throw ProcessRunner.ProcessError(
                 command: "xcodebuild -exportArchive",
                 exitCode: -1,
-                stderr: "No IPA found in export directory: \(exportPath)"
+                stderr: "No .\(expectedExt) found in export directory: \(exportPath)"
             )
         }
 
-        emit("IPA exported: \(ipaURL.path)")
+        emit("\(expectedExt.uppercased()) exported: \(artifactURL.path)")
 
         return BuildResult(
-            ipaPath: ipaURL.path,
+            ipaPath: artifactURL.path,
             archivePath: archivePath,
             log: log
         )
@@ -683,6 +802,7 @@ actor BuildPipelineService {
         appId: String?,
         ascService: AppStoreConnectService?,
         skipPolling: Bool,
+        platform: ProjectPlatform = .iOS,
         onProgress: @escaping @Sendable (String) -> Void
     ) async throws -> UploadResult {
         var log: [String] = []
@@ -701,14 +821,15 @@ actor BuildPipelineService {
         emit("API key placed at \(keyPath.path)")
 
         // Upload using xcrun altool
-        emit("Uploading IPA to App Store Connect...")
+        let platformType = platform == .macOS ? "osx" : "ios"
+        emit("Uploading \(platform == .macOS ? "PKG" : "IPA") to App Store Connect...")
         let uploadStderr = StderrCollector()
         let uploadManaged = ProcessRunner.stream(
             "xcrun",
             arguments: [
                 "altool", "--upload-app",
                 "-f", ipaPath,
-                "-t", "ios",
+                "-t", platformType,
                 "--apiKey", keyId,
                 "--apiIssuer", issuerId
             ],

@@ -27,7 +27,7 @@ struct StoreListingView: View {
             projectId: appState.activeProjectId ?? "",
             bundleId: appState.activeProject?.metadata.bundleIdentifier
         ) {
-            ASCTabContent(asc: asc, tab: .storeListing) {
+            ASCTabContent(asc: asc, tab: .storeListing, platform: appState.activeProject?.platform ?? .iOS) {
                 listingContent
             }
         }

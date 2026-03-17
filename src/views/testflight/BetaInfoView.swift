@@ -19,7 +19,7 @@ struct BetaInfoView: View {
             projectId: appState.activeProjectId ?? "",
             bundleId: appState.activeProject?.metadata.bundleIdentifier
         ) {
-            ASCTabContent(asc: asc, tab: .betaInfo) {
+            ASCTabContent(asc: asc, tab: .betaInfo, platform: appState.activeProject?.platform ?? .iOS) {
                 betaInfoContent
             }
         }

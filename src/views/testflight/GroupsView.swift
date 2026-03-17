@@ -11,7 +11,7 @@ struct GroupsView: View {
             projectId: appState.activeProjectId ?? "",
             bundleId: appState.activeProject?.metadata.bundleIdentifier
         ) {
-            ASCTabContent(asc: asc, tab: .groups) {
+            ASCTabContent(asc: asc, tab: .groups, platform: appState.activeProject?.platform ?? .iOS) {
                 groupsContent
             }
         }

@@ -16,6 +16,11 @@ enum ASCError: LocalizedError {
         }
     }
 
+    var isConflict: Bool {
+        if case .httpError(409, _) = self { return true }
+        return false
+    }
+
     /// Extract human-readable error messages from ASC JSON error responses.
     private static func parseErrorMessages(_ body: String) -> String {
         guard let data = body.data(using: .utf8),
@@ -1338,14 +1343,14 @@ final class AppStoreConnectService {
         return resp.data.first
     }
 
-    func registerBundleId(identifier: String, name: String) async throws -> ASCBundleId {
+    func registerBundleId(identifier: String, name: String, platform: String = "IOS") async throws -> ASCBundleId {
         let body: [String: Any] = [
             "data": [
                 "type": "bundleIds",
                 "attributes": [
                     "identifier": identifier,
                     "name": name,
-                    "platform": "IOS"
+                    "platform": platform
                 ]
             ]
         ]
@@ -1364,12 +1369,20 @@ final class AppStoreConnectService {
         return resp.data
     }
 
-    func createCertificate(csrContent: String) async throws -> ASCCertificate {
+    func fetchCertificates(type: String) async throws -> [ASCCertificate] {
+        let resp = try await get("certificates", queryItems: [
+            URLQueryItem(name: "filter[certificateType]", value: type),
+            URLQueryItem(name: "limit", value: "50")
+        ], as: ASCListResponse<ASCCertificate>.self)
+        return resp.data
+    }
+
+    func createCertificate(csrContent: String, type: String = "DISTRIBUTION") async throws -> ASCCertificate {
         let body: [String: Any] = [
             "data": [
                 "type": "certificates",
                 "attributes": [
-                    "certificateType": "DISTRIBUTION",
+                    "certificateType": type,
                     "csrContent": csrContent
                 ]
             ]
@@ -1381,13 +1394,13 @@ final class AppStoreConnectService {
 
     // MARK: - Profiles
 
-    func createProfile(name: String, bundleIdResourceId: String, certificateId: String) async throws -> ASCProfile {
+    func createProfile(name: String, bundleIdResourceId: String, certificateId: String, profileType: String = "IOS_APP_STORE") async throws -> ASCProfile {
         let body: [String: Any] = [
             "data": [
                 "type": "profiles",
                 "attributes": [
                     "name": name,
-                    "profileType": "IOS_APP_STORE"
+                    "profileType": profileType
                 ],
                 "relationships": [
                     "bundleId": [
@@ -1402,6 +1415,18 @@ final class AppStoreConnectService {
         let data = try await post(path: "profiles", body: body)
         let result = try JSONDecoder().decode(ASCSingleResponse<ASCProfile>.self, from: data)
         return result.data
+    }
+
+    func fetchProfiles(name: String) async throws -> [ASCProfile] {
+        let resp = try await get("profiles", queryItems: [
+            URLQueryItem(name: "filter[name]", value: name),
+            URLQueryItem(name: "limit", value: "10")
+        ], as: ASCListResponse<ASCProfile>.self)
+        return resp.data
+    }
+
+    func deleteProfile(id: String) async throws {
+        try await delete(path: "profiles/\(id)")
     }
 
     // MARK: - Bundle ID Capabilities

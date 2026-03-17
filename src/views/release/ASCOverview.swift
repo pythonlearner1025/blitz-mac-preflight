@@ -13,7 +13,7 @@ struct ASCOverview: View {
             projectId: appState.activeProjectId ?? "",
             bundleId: appState.activeProject?.metadata.bundleIdentifier
         ) {
-            ASCTabContent(asc: asc, tab: .ascOverview) {
+            ASCTabContent(asc: asc, tab: .ascOverview, platform: appState.activeProject?.platform ?? .iOS) {
                 overviewContent
             }
         }

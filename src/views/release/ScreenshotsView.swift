@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 private enum ScreenshotDeviceType: String, CaseIterable, Identifiable {
     case iPhone
     case iPad
+    case mac
 
     var id: String { rawValue }
 
@@ -13,20 +14,7 @@ private enum ScreenshotDeviceType: String, CaseIterable, Identifiable {
         switch self {
         case .iPhone: "iPhone 6.5\""
         case .iPad: "iPad Pro 12.9\""
-        }
-    }
-
-    var requiredWidth: Int {
-        switch self {
-        case .iPhone: 1242
-        case .iPad: 2048
-        }
-    }
-
-    var requiredHeight: Int {
-        switch self {
-        case .iPhone: 2688
-        case .iPad: 2732
+        case .mac: "Mac"
         }
     }
 
@@ -34,11 +22,39 @@ private enum ScreenshotDeviceType: String, CaseIterable, Identifiable {
         switch self {
         case .iPhone: "APP_IPHONE_67"
         case .iPad: "APP_IPAD_PRO_3GEN_129"
+        case .mac: "APP_DESKTOP"
         }
     }
 
     var dimensionLabel: String {
-        "\(requiredWidth) \u{00d7} \(requiredHeight)"
+        switch self {
+        case .iPhone: "1242 \u{00d7} 2688"
+        case .iPad: "2048 \u{00d7} 2732"
+        case .mac: "1280\u{00d7}800, 1440\u{00d7}900, 2560\u{00d7}1600, or 2880\u{00d7}1800"
+        }
+    }
+
+    /// Validate pixel dimensions for this device type
+    func validateDimensions(width: Int, height: Int) -> Bool {
+        switch self {
+        case .iPhone:
+            return width == 1242 && height == 2688
+        case .iPad:
+            return width == 2048 && height == 2732
+        case .mac:
+            let validSizes: Set<String> = [
+                "1280x800", "1440x900", "2560x1600", "2880x1800"
+            ]
+            return validSizes.contains("\(width)x\(height)")
+        }
+    }
+
+    /// Device types applicable for a given platform
+    static func types(for platform: ProjectPlatform) -> [ScreenshotDeviceType] {
+        switch platform {
+        case .iOS: return [.iPhone, .iPad]
+        case .macOS: return [.mac]
+        }
     }
 }
 
@@ -86,17 +102,23 @@ struct ScreenshotsView: View {
     var appState: AppState
 
     private var asc: ASCManager { appState.ascManager }
+    private var platform: ProjectPlatform { appState.activeProject?.platform ?? .iOS }
 
     @State private var selectedDevice: ScreenshotDeviceType = .iPhone
     @State private var iphoneScreenshots: [LocalScreenshot] = []
     @State private var ipadScreenshots: [LocalScreenshot] = []
+    @State private var macScreenshots: [LocalScreenshot] = []
     @State private var draggedScreenshot: LocalScreenshot?
     @State private var importError: String?
     @State private var isUploading = false
     @State private var uploadDone = false
 
     private var screenshotsBinding: Binding<[LocalScreenshot]> {
-        selectedDevice == .iPhone ? $iphoneScreenshots : $ipadScreenshots
+        switch selectedDevice {
+        case .iPhone: return $iphoneScreenshots
+        case .iPad: return $ipadScreenshots
+        case .mac: return $macScreenshots
+        }
     }
 
     private var screenshots: [LocalScreenshot] {
@@ -112,17 +134,27 @@ struct ScreenshotsView: View {
         return asc.screenshots[set.id] ?? []
     }
 
+    private var availableDeviceTypes: [ScreenshotDeviceType] {
+        ScreenshotDeviceType.types(for: platform)
+    }
+
     var body: some View {
         ASCCredentialGate(
             ascManager: asc,
             projectId: appState.activeProjectId ?? "",
             bundleId: appState.activeProject?.metadata.bundleIdentifier
         ) {
-            ASCTabContent(asc: asc, tab: .screenshots) {
+            ASCTabContent(asc: asc, tab: .screenshots, platform: appState.activeProject?.platform ?? .iOS) {
                 screenshotsContent
             }
         }
         .task { await asc.fetchTabData(.screenshots) }
+        .onAppear {
+            // Default to the first available device type for this platform
+            if let first = availableDeviceTypes.first, !availableDeviceTypes.contains(selectedDevice) {
+                selectedDevice = first
+            }
+        }
     }
 
     // MARK: - Content
@@ -163,13 +195,18 @@ struct ScreenshotsView: View {
 
     private var headerBar: some View {
         HStack(spacing: 12) {
-            Picker("Device", selection: $selectedDevice) {
-                ForEach(ScreenshotDeviceType.allCases) { device in
-                    Text(device.label).tag(device)
+            if availableDeviceTypes.count > 1 {
+                Picker("Device", selection: $selectedDevice) {
+                    ForEach(availableDeviceTypes) { device in
+                        Text(device.label).tag(device)
+                    }
                 }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 280)
+            } else if let device = availableDeviceTypes.first {
+                Text(device.label)
+                    .font(.callout.bold())
             }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 280)
 
             Spacer()
 
@@ -246,7 +283,11 @@ struct ScreenshotsView: View {
         ContentUnavailableView {
             Label("No Screenshots", systemImage: "photo.on.rectangle")
         } description: {
-            Text("Add \(selectedDevice.label) screenshots (\(selectedDevice.dimensionLabel)) to manage your App Store listing.")
+            VStack(spacing: 4) {
+                Text("Drag up to 3 app previews and 10 screenshots here.")
+                Text("(\(selectedDevice.dimensionLabel))")
+                    .foregroundStyle(.tertiary)
+            }
         } actions: {
             Button("Add Screenshots") { openFilePicker() }
                 .buttonStyle(.borderedProminent)
@@ -452,7 +493,7 @@ struct ScreenshotsView: View {
                 pixelHeight = bitmap.pixelsHigh
             }
 
-            guard pixelWidth == selectedDevice.requiredWidth && pixelHeight == selectedDevice.requiredHeight else {
+            guard selectedDevice.validateDimensions(width: pixelWidth, height: pixelHeight) else {
                 errors.append(
                     "\(url.lastPathComponent): \(pixelWidth)\u{00d7}\(pixelHeight) \u{2014} need \(selectedDevice.dimensionLabel)"
                 )
