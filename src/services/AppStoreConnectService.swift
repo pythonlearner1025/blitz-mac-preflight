@@ -185,6 +185,10 @@ final class AppStoreConnectService {
         }
     }
 
+    func deleteScreenshot(screenshotId: String) async throws {
+        try await delete(path: "appScreenshots/\(screenshotId)")
+    }
+
     // MARK: - Versioned-Path HTTP Helpers (for /v2, /v3 endpoints)
 
     private func makeRequest(fullPath: String, queryItems: [URLQueryItem] = []) throws -> URLRequest {
@@ -676,10 +680,20 @@ final class AppStoreConnectService {
     }
 
     func fetchInAppPurchases(appId: String) async throws -> [ASCInAppPurchase] {
-        let resp = try await get("apps/\(appId)/inAppPurchasesV2", queryItems: [
-            URLQueryItem(name: "limit", value: "200")
-        ], as: ASCListResponse<ASCInAppPurchase>.self)
-        return resp.data
+        var all: [ASCInAppPurchase] = []
+        var path = "apps/\(appId)/inAppPurchasesV2"
+        var queryItems = [URLQueryItem(name: "limit", value: "200")]
+
+        while true {
+            let resp = try await get(path, queryItems: queryItems, as: ASCPaginatedResponse<ASCInAppPurchase>.self)
+            all.append(contentsOf: resp.data)
+            guard let next = resp.links?.next,
+                  let comps = URLComponents(string: next),
+                  let nextPath = comps.path.split(separator: "/v1/").last else { break }
+            path = String(nextPath)
+            queryItems = comps.queryItems ?? []
+        }
+        return all
     }
 
     // MARK: - Territories & Availability
@@ -949,17 +963,37 @@ final class AppStoreConnectService {
     }
 
     func fetchSubscriptionGroups(appId: String) async throws -> [ASCSubscriptionGroup] {
-        let resp = try await get("apps/\(appId)/subscriptionGroups", queryItems: [
-            URLQueryItem(name: "limit", value: "200")
-        ], as: ASCListResponse<ASCSubscriptionGroup>.self)
-        return resp.data
+        var all: [ASCSubscriptionGroup] = []
+        var path = "apps/\(appId)/subscriptionGroups"
+        var queryItems = [URLQueryItem(name: "limit", value: "200")]
+
+        while true {
+            let resp = try await get(path, queryItems: queryItems, as: ASCPaginatedResponse<ASCSubscriptionGroup>.self)
+            all.append(contentsOf: resp.data)
+            guard let next = resp.links?.next,
+                  let comps = URLComponents(string: next),
+                  let nextPath = comps.path.split(separator: "/v1/").last else { break }
+            path = String(nextPath)
+            queryItems = comps.queryItems ?? []
+        }
+        return all
     }
 
     func fetchSubscriptionsInGroup(groupId: String) async throws -> [ASCSubscription] {
-        let resp = try await get("subscriptionGroups/\(groupId)/subscriptions", queryItems: [
-            URLQueryItem(name: "limit", value: "200")
-        ], as: ASCListResponse<ASCSubscription>.self)
-        return resp.data
+        var all: [ASCSubscription] = []
+        var path = "subscriptionGroups/\(groupId)/subscriptions"
+        var queryItems = [URLQueryItem(name: "limit", value: "200")]
+
+        while true {
+            let resp = try await get(path, queryItems: queryItems, as: ASCPaginatedResponse<ASCSubscription>.self)
+            all.append(contentsOf: resp.data)
+            guard let next = resp.links?.next,
+                  let comps = URLComponents(string: next),
+                  let nextPath = comps.path.split(separator: "/v1/").last else { break }
+            path = String(nextPath)
+            queryItems = comps.queryItems ?? []
+        }
+        return all
     }
 
     func deleteInAppPurchase(iapId: String) async throws {
@@ -1459,6 +1493,24 @@ final class AppStoreConnectService {
         return resp.data.first
     }
 
+    // MARK: - Fetch Review Submissions
+
+    func fetchReviewSubmissions(appId: String) async throws -> [ASCReviewSubmission] {
+        let resp = try await get("reviewSubmissions", queryItems: [
+            URLQueryItem(name: "filter[app]", value: appId),
+            URLQueryItem(name: "sort", value: "-submittedDate"),
+            URLQueryItem(name: "limit", value: "10")
+        ], as: ASCPaginatedResponse<ASCReviewSubmission>.self)
+        return resp.data
+    }
+
+    func fetchReviewSubmissionItems(submissionId: String) async throws -> [ASCReviewSubmissionItem] {
+        let resp = try await get("reviewSubmissions/\(submissionId)/items", queryItems: [
+            URLQueryItem(name: "limit", value: "50")
+        ], as: ASCPaginatedResponse<ASCReviewSubmissionItem>.self)
+        return resp.data
+    }
+
     // MARK: - Submit for Review
 
     func submitForReview(appId: String, versionId: String) async throws {
@@ -1543,6 +1595,17 @@ struct ASCReviewSubmission: Decodable, Identifiable {
     let id: String
     struct Attributes: Decodable {
         let state: String?
+        let submittedDate: String?
+        let platform: String?
+    }
+    let attributes: Attributes
+}
+
+struct ASCReviewSubmissionItem: Decodable, Identifiable {
+    let id: String
+    struct Attributes: Decodable {
+        let state: String?
+        let resolved: Bool?
     }
     let attributes: Attributes
 }
