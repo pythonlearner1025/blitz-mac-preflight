@@ -41,9 +41,42 @@ jobs:
             .build/Blitz.app.zip
             .build/Blitz.app.zip.sha256
 
+  build_x86_64:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Build (release)
+        run: swift build -c release
+
+      - name: Run tests
+        run: swift test
+
+      - name: Bundle .app
+        run: |
+          APPLE_SIGNING_IDENTITY="-" bash scripts/bundle.sh release
+
+      - name: Generate checksums
+        run: |
+          cd .build
+          ditto -c -k --sequesterRsrc --keepParent Blitz.app Blitz-x86_64.app.zip
+          shasum -a 256 Blitz-x86_64.app.zip > Blitz-x86_64.app.zip.sha256
+          cat Blitz-x86_64.app.zip.sha256
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Blitz-x86_64-${{ github.sha }}
+          path: |
+            .build/Blitz-x86_64.app.zip
+            .build/Blitz-x86_64.app.zip.sha256
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, build_x86_64]
     runs-on: macos-15
     permissions:
       contents: write
@@ -165,6 +198,8 @@ jobs:
 
             **Already installed:** The app will auto-update, or download `Blitz.app.zip` to update manually.
 
+            **Intel Macs:** Download `Blitz-${{ steps.version.outputs.version }}-x86_64.app.zip` from the release assets for a native x86_64 build.
+
             ## Verify this build
 
             Download `SHA256SUMS.txt` and verify:
@@ -176,6 +211,74 @@ jobs:
             ```bash
             bash scripts/verify-build.sh ${{ github.ref_name }}
             ```
+
+      - name: Cleanup keychain
+        if: always()
+        run: security delete-keychain $RUNNER_TEMP/app-signing.keychain-db 2>/dev/null || true
+
+  release_x86_64:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, build_x86_64, release]
+    runs-on: macos-15-intel
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Import signing certificate
+        if: env.APPLE_CERTIFICATE_BASE64 != ''
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          # Create temporary keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import certificate
+          CERT_PATH=$RUNNER_TEMP/certificate.p12
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$CERT_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Add to search list
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+      - name: Get version
+        id: version
+        run: echo "version=$(node -e "process.stdout.write(require('./package.json').version)")" >> "$GITHUB_OUTPUT"
+
+      - name: Build x86_64 .app artifact
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
+        run: |
+          swift build -c release
+          bash scripts/bundle.sh release
+          mkdir -p build
+          ditto -c -k --sequesterRsrc --keepParent .build/Blitz.app "build/Blitz-${{ steps.version.outputs.version }}-x86_64.app.zip"
+          shasum -a 256 "build/Blitz-${{ steps.version.outputs.version }}-x86_64.app.zip" > "build/Blitz-${{ steps.version.outputs.version }}-x86_64.app.zip.sha256"
+
+      - name: Upload x86_64 release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            build/Blitz-${{ steps.version.outputs.version }}-x86_64.app.zip
+            build/Blitz-${{ steps.version.outputs.version }}-x86_64.app.zip.sha256
 
       - name: Cleanup keychain
         if: always()
