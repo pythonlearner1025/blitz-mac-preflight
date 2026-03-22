@@ -32,6 +32,10 @@ https://github.com/user-attachments/assets/07364d9f-f6a7-4375-acc8-b7ab46dcc60e
 - Xcode 16+ (Swift 5.10+)
 - Node.js 18+ (for build scripts and sidecar)
 
+## Download
+
+[Download from website](https://blitz.dev)
+
 ## Build from source
 
 ```bash
