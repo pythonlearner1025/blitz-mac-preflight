@@ -148,7 +148,7 @@ struct ProjectStorage {
             "command": "bash",
             "args": [bridgePath]
         ]
-        // Use full path to npx from the detected Node.js runtime.
+        // Use full path to npx from Blitz's bundled Node.js runtime.
         // Also set PATH env so that #!/usr/bin/env node resolves correctly —
         // npx and the packages it runs use env shebang lookups.
         let nodeRuntimeBin = BlitzPaths.nodeDir.path

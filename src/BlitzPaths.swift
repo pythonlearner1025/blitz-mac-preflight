@@ -37,18 +37,8 @@ enum BlitzPaths {
         root.appendingPathComponent("idb-companion/bin/idb_companion")
     }
 
-    /// Node.js bin directory — reads from ~/.blitz/node-bin-path (written by installer),
-    /// falls back to ~/.blitz/node-runtime/bin/.
-    static var nodeDir: URL {
-        let pathFile = root.appendingPathComponent("node-bin-path")
-        if let saved = try? String(contentsOf: pathFile, encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-           !saved.isEmpty,
-           FileManager.default.isExecutableFile(atPath: saved + "/node") {
-            return URL(fileURLWithPath: saved)
-        }
-        return root.appendingPathComponent("node-runtime/bin")
-    }
+    /// Node.js runtime: ~/.blitz/node-runtime/bin/
+    static var nodeDir: URL { root.appendingPathComponent("node-runtime/bin") }
 
     /// Screenshots directory for a project: ~/.blitz/projects/{projectId}/.blitz/screenshots/
     static func screenshots(projectId: String) -> URL {
