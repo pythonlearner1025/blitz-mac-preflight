@@ -155,6 +155,21 @@ struct ASCScreenshot: Decodable, Identifiable {
             .replacingOccurrences(of: "{f}", with: "png")
         return URL(string: urlStr)
     }
+
+    var hasError: Bool {
+        if !(attributes.assetDeliveryState?.errors ?? []).isEmpty { return true }
+        let state = attributes.assetDeliveryState?.state ?? ""
+        return state == "FAILED"
+    }
+
+    var errorDescription: String? {
+        if let errors = attributes.assetDeliveryState?.errors, !errors.isEmpty {
+            return errors.compactMap { $0.description }.joined(separator: "\n")
+        }
+        let state = attributes.assetDeliveryState?.state ?? ""
+        if state == "FAILED" { return "Upload failed" }
+        return nil
+    }
 }
 
 // MARK: - CustomerReview

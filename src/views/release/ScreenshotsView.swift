@@ -278,7 +278,26 @@ struct ScreenshotsView: View {
 
     @ViewBuilder
     private func slotDetailImage(_ slot: TrackSlot) -> some View {
-        if let image = slot.localImage {
+        if let ascShot = slot.ascScreenshot, ascShot.hasError {
+            VStack(spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.red)
+                Text("Screenshot Error")
+                    .font(.headline)
+                    .foregroundStyle(.red)
+                if let desc = ascShot.errorDescription {
+                    Text(desc)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 300)
+                }
+                Text("Delete and re-upload this screenshot.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        } else if let image = slot.localImage {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
@@ -370,13 +389,32 @@ struct ScreenshotsView: View {
         let slot = currentTrack[index]
         let saved = (asc.savedTrackState[selectedDevice.ascDisplayType] ?? Array(repeating: nil, count: 10))[index]
         let isSynced = slot?.id == saved?.id && slot != nil
+        let hasError = slot?.ascScreenshot?.hasError == true
 
         return VStack(spacing: 4) {
             ZStack(alignment: .topLeading) {
                 if let slot {
                     // Slot has content
                     Group {
-                        if let image = slot.localImage {
+                        if hasError {
+                            // Error state: red-outlined phone frame with error icon
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color(.controlBackgroundColor))
+                                .overlay(
+                                    VStack(spacing: 6) {
+                                        Image(systemName: "exclamationmark.circle.fill")
+                                            .font(.title2)
+                                            .foregroundStyle(.red)
+                                        Text("Error")
+                                            .font(.caption2)
+                                            .foregroundStyle(.red)
+                                    }
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .stroke(.red, lineWidth: 1.5)
+                                )
+                        } else if let image = slot.localImage {
                             Image(nsImage: image)
                                 .resizable()
                                 .aspectRatio(contentMode: .fit)
@@ -427,7 +465,7 @@ struct ScreenshotsView: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 2)
-                    .background(slot != nil ? (isSynced ? Color.green : Color.orange) : Color.gray.opacity(0.5))
+                    .background(hasError ? Color.red : (slot != nil ? (isSynced ? Color.green : Color.orange) : Color.gray.opacity(0.5)))
                     .clipShape(RoundedRectangle(cornerRadius: 4))
                     .padding(4)
             }
@@ -436,7 +474,7 @@ struct ScreenshotsView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(slot != nil ? (isSynced ? Color.green : Color.orange) : .clear, lineWidth: 2)
+                    .stroke(hasError ? Color.red : (slot != nil ? (isSynced ? Color.green : Color.orange) : .clear), lineWidth: 2)
             )
             .onTapGesture {
                 if slot != nil {
@@ -461,7 +499,11 @@ struct ScreenshotsView: View {
                 return NSItemProvider()
             }
 
-            if slot != nil {
+            if slot != nil, hasError {
+                Text("Error")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            } else if slot != nil {
                 Text(isSynced ? "Synced" : "Changed")
                     .font(.caption2)
                     .foregroundStyle(isSynced ? .green : .orange)
