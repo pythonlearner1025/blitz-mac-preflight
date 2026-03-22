@@ -1,6 +1,6 @@
 #!/bin/bash
 # Blitz PKG Postinstall Script
-# Sets up ~/.blitz directory, installs toolchain (Node, Ruby, CocoaPods, Python, idb, Claude Code).
+# Sets up ~/.blitz directory, installs toolchain (Node, Ruby, CocoaPods, Python, idb).
 #
 # NOTE: The app itself (Blitz.app) is installed to /Applications by the PKG system,
 # NOT by this script. This script only handles post-installation setup.
@@ -400,79 +400,6 @@ else
     fi
 fi
 echo "TIMING: python + idb took $(( $(date +%s) - T_IDB_START ))s" >> "$LOG"
-
-
-
-# ============================================================================
-# Install Claude Code CLI
-# ============================================================================
-
-T_CLAUDE_START=$(date +%s)
-BLITZ_CLAUDE_DIR="$CONSOLE_HOME/.blitz/claude-code"
-CLAUDE_BIN="$BLITZ_CLAUDE_DIR/bin/claude"
-
-if [ -x "$CLAUDE_BIN" ]; then
-    echo "OK: Claude Code already installed at $CLAUDE_BIN" >> "$LOG"
-else
-    echo "Installing Claude Code CLI..." >> "$LOG"
-    show_progress "Installing Claude Code CLI..."
-
-    mkdir -p "$BLITZ_CLAUDE_DIR"
-    if [ "$IS_ROOT" = true ]; then chown -R "$CONSOLE_USER" "$BLITZ_CLAUDE_DIR"; fi
-
-    if [ -n "$NODE_DIR" ] && [ -x "$NODE_DIR/npm" ]; then
-        if run_as_user \
-            env "PATH=$NODE_DIR:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" "HOME=$CONSOLE_HOME" \
-            "$NODE_DIR/npm" install -g --prefix "$BLITZ_CLAUDE_DIR" @anthropic-ai/claude-code > /dev/null 2>> "$LOG"; then
-            echo "Claude Code installed to $BLITZ_CLAUDE_DIR" >> "$LOG"
-        else
-            echo "WARNING: Failed to install Claude Code" >> "$LOG"
-        fi
-    else
-        echo "WARNING: npm not found, skipping Claude Code install" >> "$LOG"
-    fi
-fi
-echo "TIMING: claude-code install took $(( $(date +%s) - T_CLAUDE_START ))s" >> "$LOG"
-
-
-# ============================================================================
-# Ensure `expect` is available (used by companion auto-login flow)
-# ============================================================================
-
-T_EXPECT_START=$(date +%s)
-EXPECT_BIN=""
-for p in /usr/bin/expect /opt/homebrew/bin/expect /usr/local/bin/expect; do
-    if [ -x "$p" ]; then
-        EXPECT_BIN="$p"
-        break
-    fi
-done
-
-if [ -n "$EXPECT_BIN" ]; then
-    echo "OK: expect already installed at $EXPECT_BIN" >> "$LOG"
-else
-    echo "expect not found, installing via Homebrew..." >> "$LOG"
-    BREW_BIN=""
-    for p in /opt/homebrew/bin/brew /usr/local/bin/brew; do
-        if [ -x "$p" ]; then
-            BREW_BIN="$p"
-            break
-        fi
-    done
-
-    if [ -n "$BREW_BIN" ]; then
-        if run_as_user \
-            env "HOME=$CONSOLE_HOME" \
-            "$BREW_BIN" install expect >> "$LOG" 2>&1; then
-            echo "expect installed via Homebrew" >> "$LOG"
-        else
-            echo "WARNING: Failed to install expect via Homebrew" >> "$LOG"
-        fi
-    else
-        echo "WARNING: Homebrew not found, cannot install expect" >> "$LOG"
-    fi
-fi
-echo "TIMING: expect check took $(( $(date +%s) - T_EXPECT_START ))s" >> "$LOG"
 
 
 # ============================================================================
