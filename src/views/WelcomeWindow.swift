@@ -32,7 +32,7 @@ struct WelcomeWindow: View {
         .task {
             // Show onboarding on first launch
             // TODO: remove `true ||` before release
-            if true || !appState.settingsStore.hasCompletedOnboarding {
+            if !appState.settingsStore.hasCompletedOnboarding {
                 showOnboarding = true
             }
         }
