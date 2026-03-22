@@ -1606,6 +1606,25 @@ struct ASCReviewSubmissionItem: Decodable, Identifiable {
     struct Attributes: Decodable {
         let state: String?
         let resolved: Bool?
+        let createdDate: String?
     }
     let attributes: Attributes
+    let relationships: Relationships?
+
+    struct Relationships: Decodable {
+        let appStoreVersion: ToOneRelationship?
+
+        struct ToOneRelationship: Decodable {
+            let data: ResourceIdentifier?
+        }
+
+        struct ResourceIdentifier: Decodable {
+            let type: String
+            let id: String
+        }
+    }
+
+    var appStoreVersionId: String? {
+        relationships?.appStoreVersion?.data?.id
+    }
 }

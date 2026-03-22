@@ -80,7 +80,9 @@ final class ASCManager {
 
     // Review submission history (for rejection tracking)
     var reviewSubmissions: [ASCReviewSubmission] = []
+    var reviewSubmissionItemsBySubmissionId: [String: [ASCReviewSubmissionItem]] = [:]
     var latestSubmissionItems: [ASCReviewSubmissionItem] = []
+    var submissionHistoryEvents: [ASCSubmissionHistoryEvent] = []
 
     // Iris (Apple ID session) — rejection feedback from internal API
     enum IrisSessionState { case unknown, noSession, valid, expired }
@@ -339,6 +341,10 @@ final class ASCManager {
         isSubmitting = false
         submissionError = nil
         writeError = nil
+        reviewSubmissions = []
+        reviewSubmissionItemsBySubmissionId = [:]
+        latestSubmissionItems = []
+        submissionHistoryEvents = []
         appIconStatus = nil
         monetizationStatus = nil
         attachedSubmissionItemIDs = []
@@ -444,6 +450,9 @@ final class ASCManager {
         resolutionCenterThreads = []
         rejectionMessages = []
         rejectionReasons = []
+        if let appId = app?.id {
+            rebuildSubmissionHistory(appId: appId)
+        }
     }
 
     /// Loads cached feedback from disk for the given rejected version. No auth needed.
@@ -456,6 +465,7 @@ final class ASCManager {
             irisLog("ASCManager.loadCachedFeedback: no cache found")
             cachedFeedback = nil
         }
+        rebuildSubmissionHistory(appId: appId)
     }
 
     func fetchRejectionFeedback() async {
@@ -516,6 +526,7 @@ final class ASCManager {
         }
 
         isLoadingIrisFeedback = false
+        rebuildSubmissionHistory(appId: appId)
         irisLog("ASCManager.fetchRejectionFeedback: done")
     }
 
@@ -543,6 +554,282 @@ final class ASCManager {
             messages: msgs,
             reasons: reasons
         )
+    }
+
+    private func refreshReviewSubmissionData(appId: String, service: AppStoreConnectService) async {
+        let submissions = (try? await service.fetchReviewSubmissions(appId: appId)) ?? []
+        reviewSubmissions = submissions
+
+        guard !submissions.isEmpty else {
+            reviewSubmissionItemsBySubmissionId = [:]
+            latestSubmissionItems = []
+            return
+        }
+
+        var itemsBySubmissionId: [String: [ASCReviewSubmissionItem]] = [:]
+        await withTaskGroup(of: (String, [ASCReviewSubmissionItem]).self) { group in
+            for submission in submissions {
+                group.addTask {
+                    let items = (try? await service.fetchReviewSubmissionItems(submissionId: submission.id)) ?? []
+                    return (submission.id, items)
+                }
+            }
+
+            for await (submissionId, items) in group {
+                itemsBySubmissionId[submissionId] = items
+            }
+        }
+
+        reviewSubmissionItemsBySubmissionId = itemsBySubmissionId
+        latestSubmissionItems = itemsBySubmissionId[submissions.first?.id ?? ""] ?? []
+    }
+
+    private func historyNowString() -> String {
+        ISO8601DateFormatter().string(from: Date())
+    }
+
+    private func historyDate(_ iso: String?) -> Date {
+        guard let iso else { return .distantPast }
+        let f1 = ISO8601DateFormatter()
+        f1.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let f2 = ISO8601DateFormatter()
+        return f1.date(from: iso) ?? f2.date(from: iso) ?? .distantPast
+    }
+
+    private func historyEventType(forVersionState state: String) -> ASCSubmissionHistoryEventType? {
+        switch state {
+        case "WAITING_FOR_REVIEW":
+            return .submitted
+        case "IN_REVIEW":
+            return .inReview
+        case "PROCESSING":
+            return .processing
+        case "PENDING_DEVELOPER_RELEASE":
+            return .accepted
+        case "READY_FOR_SALE":
+            return .live
+        case "REJECTED":
+            return .rejected
+        case "DEVELOPER_REJECTED":
+            return .withdrawn
+        case "REMOVED_FROM_SALE", "DEVELOPER_REMOVED_FROM_SALE":
+            return .removed
+        default:
+            return nil
+        }
+    }
+
+    private func historyCoverageKey(
+        versionId: String?,
+        versionString: String,
+        eventType: ASCSubmissionHistoryEventType
+    ) -> String {
+        "\(versionId ?? "version:\(versionString)")::\(eventType.rawValue)"
+    }
+
+    private func versionString(
+        for versionId: String?,
+        versionSnapshots: [String: ASCSubmissionHistoryCache.VersionSnapshot]
+    ) -> String? {
+        guard let versionId else { return nil }
+        if let version = appStoreVersions.first(where: { $0.id == versionId }) {
+            return version.attributes.versionString
+        }
+        return versionSnapshots[versionId]?.versionString
+    }
+
+    private func versionId(
+        for versionString: String,
+        versionSnapshots: [String: ASCSubmissionHistoryCache.VersionSnapshot]
+    ) -> String? {
+        if let version = appStoreVersions.first(where: { $0.attributes.versionString == versionString }) {
+            return version.id
+        }
+        return versionSnapshots.values.first(where: { $0.versionString == versionString })?.versionId
+    }
+
+    private func refreshSubmissionHistoryCache(appId: String) -> ASCSubmissionHistoryCache {
+        var cache = ASCSubmissionHistoryCache.load(appId: appId)
+        let now = historyNowString()
+
+        for version in appStoreVersions {
+            let state = version.attributes.appStoreState ?? ""
+            guard !state.isEmpty else { continue }
+
+            if var snapshot = cache.versionSnapshots[version.id] {
+                snapshot.versionString = version.attributes.versionString
+                if snapshot.lastKnownState != state,
+                   let eventType = historyEventType(forVersionState: state) {
+                    cache.transitionEvents.append(
+                        ASCSubmissionHistoryEvent(
+                            id: "ledger:\(version.id):\(state):\(now)",
+                            versionId: version.id,
+                            versionString: version.attributes.versionString,
+                            eventType: eventType,
+                            appleState: state,
+                            occurredAt: now,
+                            source: .transitionLedger,
+                            accuracy: .firstSeen,
+                            submissionId: nil,
+                            note: nil
+                        )
+                    )
+                    snapshot.lastKnownState = state
+                    snapshot.lastSeenAt = now
+                } else {
+                    snapshot.lastSeenAt = now
+                }
+                cache.versionSnapshots[version.id] = snapshot
+            } else {
+                cache.versionSnapshots[version.id] = .init(
+                    versionId: version.id,
+                    versionString: version.attributes.versionString,
+                    lastKnownState: state,
+                    lastSeenAt: now
+                )
+            }
+        }
+
+        cache.transitionEvents.sort { historyDate($0.occurredAt) > historyDate($1.occurredAt) }
+        try? cache.save()
+        return cache
+    }
+
+    private func rebuildSubmissionHistory(appId: String) {
+        let cache = refreshSubmissionHistoryCache(appId: appId)
+        let versionSnapshots = cache.versionSnapshots
+
+        let submissionEvents = reviewSubmissions.compactMap { submission -> ASCSubmissionHistoryEvent? in
+            guard let submittedAt = submission.attributes.submittedDate else { return nil }
+            let versionId = reviewSubmissionItemsBySubmissionId[submission.id]?
+                .compactMap(\.appStoreVersionId)
+                .first
+            let versionString = versionString(for: versionId, versionSnapshots: versionSnapshots) ?? "Unknown"
+            return ASCSubmissionHistoryEvent(
+                id: "submission:\(submission.id)",
+                versionId: versionId,
+                versionString: versionString,
+                eventType: .submitted,
+                appleState: "WAITING_FOR_REVIEW",
+                occurredAt: submittedAt,
+                source: .reviewSubmission,
+                accuracy: .exact,
+                submissionId: submission.id,
+                note: nil
+            )
+        }
+
+        var rejectionEventsByVersion: [String: ASCSubmissionHistoryEvent] = [:]
+        for cacheEntry in IrisFeedbackCache.loadAll(appId: appId) {
+            let rejectionAt = cacheEntry.messages
+                .compactMap(\.date)
+                .sorted(by: { historyDate($0) < historyDate($1) })
+                .first
+                ?? ISO8601DateFormatter().string(from: cacheEntry.fetchedAt)
+
+            rejectionEventsByVersion[cacheEntry.versionString] = ASCSubmissionHistoryEvent(
+                id: "iris:\(cacheEntry.versionString):\(rejectionAt)",
+                versionId: versionId(for: cacheEntry.versionString, versionSnapshots: versionSnapshots),
+                versionString: cacheEntry.versionString,
+                eventType: .rejected,
+                appleState: "REJECTED",
+                occurredAt: rejectionAt,
+                source: .irisFeedback,
+                accuracy: .derived,
+                submissionId: nil,
+                note: cacheEntry.reasons.first?.section
+            )
+        }
+
+        if let rejectedVersion = appStoreVersions.first(where: { $0.attributes.appStoreState == "REJECTED" }) {
+            let rejectionAt = resolutionCenterThreads.first?.attributes.createdDate
+                ?? rejectionMessages.compactMap(\.attributes.createdDate)
+                    .sorted(by: { historyDate($0) < historyDate($1) })
+                    .first
+            if let rejectionAt {
+                rejectionEventsByVersion[rejectedVersion.attributes.versionString] = ASCSubmissionHistoryEvent(
+                    id: "iris-live:\(rejectedVersion.id):\(rejectionAt)",
+                    versionId: rejectedVersion.id,
+                    versionString: rejectedVersion.attributes.versionString,
+                    eventType: .rejected,
+                    appleState: "REJECTED",
+                    occurredAt: rejectionAt,
+                    source: .irisFeedback,
+                    accuracy: .derived,
+                    submissionId: nil,
+                    note: rejectionReasons.first?.attributes.reasons?.first?.reasonSection
+                )
+            }
+        }
+
+        let durableEvents = submissionEvents
+            + Array(rejectionEventsByVersion.values)
+            + cache.transitionEvents
+
+        let coveredEventKeys = Set(
+            durableEvents.map {
+                historyCoverageKey(versionId: $0.versionId, versionString: $0.versionString, eventType: $0.eventType)
+            }
+        )
+
+        let fallbackEvents = appStoreVersions.compactMap { version -> ASCSubmissionHistoryEvent? in
+            let state = version.attributes.appStoreState ?? ""
+            guard let eventType = historyEventType(forVersionState: state) else { return nil }
+
+            let coverageKey = historyCoverageKey(
+                versionId: version.id,
+                versionString: version.attributes.versionString,
+                eventType: eventType
+            )
+            guard !coveredEventKeys.contains(coverageKey) else { return nil }
+
+            let occurredAt = version.attributes.createdDate
+                ?? cache.versionSnapshots[version.id]?.lastSeenAt
+                ?? historyNowString()
+
+            return ASCSubmissionHistoryEvent(
+                id: "version:\(version.id):\(state)",
+                versionId: version.id,
+                versionString: version.attributes.versionString,
+                eventType: eventType,
+                appleState: state,
+                occurredAt: occurredAt,
+                source: .currentVersion,
+                accuracy: .derived,
+                submissionId: nil,
+                note: nil
+            )
+        }
+
+        submissionHistoryEvents = (durableEvents + fallbackEvents)
+            .sorted { lhs, rhs in
+                historyDate(lhs.occurredAt) > historyDate(rhs.occurredAt)
+            }
+    }
+
+    func refreshSubmissionFeedbackIfNeeded() {
+        guard let appId = app?.id else { return }
+
+        let rejectedVersion = appStoreVersions.first(where: {
+            $0.attributes.appStoreState == "REJECTED"
+        })
+        let pendingVersion = appStoreVersions.first(where: {
+            let state = $0.attributes.appStoreState ?? ""
+            return state != "READY_FOR_SALE" && state != "REMOVED_FROM_SALE"
+                && state != "DEVELOPER_REMOVED_FROM_SALE" && !state.isEmpty
+        })
+
+        guard let version = rejectedVersion ?? pendingVersion else {
+            cachedFeedback = nil
+            rebuildSubmissionHistory(appId: appId)
+            return
+        }
+
+        loadCachedFeedback(appId: appId, versionString: version.attributes.versionString)
+        loadIrisSession()
+        if irisSessionState == .valid {
+            Task { await fetchRejectionFeedback() }
+        }
     }
 
     func saveCredentials(_ creds: ASCCredentials, projectId: String, bundleId: String?) async throws {
@@ -657,11 +944,9 @@ final class ASCManager {
                 appInfoLocalization = try? await service.fetchAppInfoLocalization(appInfoId: infoId)
             }
             builds = try await service.fetchBuilds(appId: appId)
-            // Fetch review submission history (rejection details persist until a new version is approved)
-            reviewSubmissions = (try? await service.fetchReviewSubmissions(appId: appId)) ?? []
-            if let latest = reviewSubmissions.first {
-                latestSubmissionItems = (try? await service.fetchReviewSubmissionItems(submissionId: latest.id)) ?? []
-            }
+            await refreshReviewSubmissionData(appId: appId, service: service)
+            rebuildSubmissionHistory(appId: appId)
+            refreshSubmissionFeedbackIfNeeded()
 
             // Check monetization status — skip if already set (avoids race with in-flight fetches overwriting optimistic updates from setPriceFree/setAppPrice)
             if monetizationStatus == nil {
@@ -717,11 +1002,8 @@ final class ASCManager {
                 ageRatingDeclaration = try? await service.fetchAgeRating(appInfoId: infoId)
             }
             builds = try await service.fetchBuilds(appId: appId)
-            // Fetch review submission history (for rejection details)
-            reviewSubmissions = (try? await service.fetchReviewSubmissions(appId: appId)) ?? []
-            if let latest = reviewSubmissions.first {
-                latestSubmissionItems = (try? await service.fetchReviewSubmissionItems(submissionId: latest.id)) ?? []
-            }
+            await refreshReviewSubmissionData(appId: appId, service: service)
+            rebuildSubmissionHistory(appId: appId)
 
         case .monetization:
             appPricePoints = try await service.fetchAppPricePoints(appId: appId)
@@ -1602,7 +1884,7 @@ final class ASCManager {
 
     func submitForReview(attachBuildId: String? = nil) async {
         guard let service else { return }
-        guard let appId = app?.id, let versionId = appStoreVersions.first?.id else { return }
+        guard let appId = app?.id, let versionId = pendingVersionId else { return }
         isSubmitting = true
         submissionError = nil
         do {
@@ -1612,8 +1894,7 @@ final class ASCManager {
             }
             try await service.submitForReview(appId: appId, versionId: versionId)
             isSubmitting = false
-            // Refresh versions to show new state
-            appStoreVersions = try await service.fetchAppStoreVersions(appId: appId)
+            await refreshTabData(.ascOverview)
         } catch {
             isSubmitting = false
             submissionError = error.localizedDescription
