@@ -1256,14 +1256,20 @@ final class ASCManager {
     }
 
     func loadTrackFromASC(displayType: String) {
+        let previousSlots = trackSlots[displayType] ?? []
         let set = screenshotSets.first { $0.attributes.screenshotDisplayType == displayType }
         var slots: [TrackSlot?] = Array(repeating: nil, count: 10)
         if let set, let shots = screenshots[set.id] {
             for (i, shot) in shots.prefix(10).enumerated() {
+                // If ASC hasn't processed the image yet, carry forward the local preview
+                var localImage: NSImage? = nil
+                if shot.imageURL == nil, i < previousSlots.count, let prev = previousSlots[i] {
+                    localImage = prev.localImage
+                }
                 slots[i] = TrackSlot(
                     id: shot.id,
                     localPath: nil,
-                    localImage: nil,
+                    localImage: localImage,
                     ascScreenshot: shot,
                     isFromASC: true
                 )
