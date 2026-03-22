@@ -164,6 +164,18 @@ enum MCPToolRegistry {
             required: []
         ))
 
+        // -- ASC Credentials --
+        tools.append(tool(
+            name: "asc_set_credentials",
+            description: "Pre-fill the App Store Connect API credential form with issuer ID, key ID, and private key file. The user must click 'Save Credentials' to confirm. Works in both onboarding and release tabs.",
+            properties: [
+                "issuerId": ["type": "string", "description": "Issuer ID (UUID format)"],
+                "keyId": ["type": "string", "description": "Key ID (10-character alphanumeric)"],
+                "privateKeyPath": ["type": "string", "description": "Absolute path to the .p8 private key file (e.g. ~/.blitz/AuthKey_XXXXXXXXXX.p8)"]
+            ],
+            required: ["issuerId", "keyId", "privateKeyPath"]
+        ))
+
         // -- ASC Form Tools --
         tools.append(tool(
             name: "asc_fill_form",
@@ -333,14 +345,18 @@ enum MCPToolRegistry {
         case "settings_update", "settings_save":
             return .settingsMutation
 
-        // ASC mutation tools
+        // ASC credential pre-fill — no approval needed, user must click Save
+        case "asc_set_credentials":
+            return .query
         case "asc_fill_form":
             return .ascFormMutation
         case "screenshots_add_asset", "screenshots_set_track", "screenshots_save":
             return .ascScreenshotMutation
         case "asc_open_submit_preview":
             return .ascSubmitMutation
-        case "asc_create_iap", "asc_create_subscription", "asc_set_app_price", "asc_web_auth":
+        case "asc_web_auth":
+            return .query  // user-interactive (Apple ID login) — no approval needed
+        case "asc_create_iap", "asc_create_subscription", "asc_set_app_price":
             return .ascFormMutation
 
         // Build pipeline tools

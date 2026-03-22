@@ -70,6 +70,7 @@ final class ASCManager {
     var appInfoLocalization: ASCAppInfoLocalization?
     var ageRatingDeclaration: ASCAgeRatingDeclaration?
     var reviewDetail: ASCReviewDetail?
+    var pendingCredentialValues: [String: String]?  // Pre-fill values for ASC credential form (from MCP)
     var pendingFormValues: [String: [String: String]] = [:]  // tab → field → value (for MCP pre-fill)
     var pendingFormVersion: Int = 0  // Incremented when pendingFormValues changes; views watch this
     var pendingCreateValues: [String: String]?  // Pre-fill values for IAP/subscription create forms (from MCP)
@@ -288,6 +289,11 @@ final class ASCManager {
         }
     }
 
+    private func refreshAppIconStatusIfNeeded(for projectId: String?) {
+        guard let projectId, !projectId.isEmpty else { return }
+        checkAppIcon(projectId: projectId)
+    }
+
     // MARK: - Project Lifecycle
 
     func loadCredentials(for projectId: String, bundleId: String?) async {
@@ -301,6 +307,7 @@ final class ASCManager {
         credentials = creds
         isLoadingCredentials = false
         loadedProjectId = projectId
+        refreshAppIconStatusIfNeeded(for: projectId)
 
         if let creds {
             service = AppStoreConnectService(credentials: creds)
@@ -923,6 +930,7 @@ final class ASCManager {
 
         switch tab {
         case .ascOverview:
+            refreshAppIconStatusIfNeeded(for: loadedProjectId)
             let versions = try await service.fetchAppStoreVersions(appId: appId)
             appStoreVersions = versions
             appInfo = try? await service.fetchAppInfo(appId: appId)

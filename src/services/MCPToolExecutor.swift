@@ -236,6 +236,10 @@ actor MCPToolExecutor {
         case "get_tab_state":
             return try await executeGetTabState(arguments)
 
+        // -- ASC Credentials --
+        case "asc_set_credentials":
+            return await executeASCSetCredentials(arguments)
+
         // -- ASC Form Tools --
         case "asc_fill_form":
             return try await executeASCFillForm(arguments)
@@ -566,6 +570,31 @@ actor MCPToolExecutor {
         "email": "contactEmail",
         "phone": "contactPhone",
     ]
+
+    private func executeASCSetCredentials(_ args: [String: Any]) async -> [String: Any] {
+        guard let issuerId = args["issuerId"] as? String,
+              let keyId = args["keyId"] as? String,
+              let rawPath = args["privateKeyPath"] as? String else {
+            return mcpText("Error: issuerId, keyId, and privateKeyPath are required.")
+        }
+
+        let path = NSString(string: rawPath).expandingTildeInPath
+        guard FileManager.default.fileExists(atPath: path),
+              let privateKey = try? String(contentsOfFile: path, encoding: .utf8),
+              !privateKey.isEmpty else {
+            return mcpText("Error: could not read private key file at \(rawPath)")
+        }
+
+        await MainActor.run {
+            appState.ascManager.pendingCredentialValues = [
+                "issuerId": issuerId,
+                "keyId": keyId,
+                "privateKey": privateKey,
+                "privateKeyFileName": URL(fileURLWithPath: path).lastPathComponent
+            ]
+        }
+        return mcpText("Credentials pre-filled. The user can verify and click 'Save Credentials'.")
+    }
 
     private func executeASCFillForm(_ args: [String: Any]) async throws -> [String: Any] {
         guard let tab = args["tab"] as? String else {
