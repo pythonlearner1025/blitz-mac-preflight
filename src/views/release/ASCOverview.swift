@@ -195,16 +195,6 @@ struct ASCOverview: View {
                                         }
                                     }
                                 } else if let url = field.actionUrl, let nsUrl = URL(string: url) {
-                                    Button {
-                                        launchAIFixForField(field)
-                                    } label: {
-                                        HStack(spacing: 3) {
-                                            Image(systemName: "sparkles")
-                                            Text("Fix")
-                                        }
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
                                     Button("Open in Web") {
                                         NSWorkspace.shared.open(nsUrl)
                                     }
