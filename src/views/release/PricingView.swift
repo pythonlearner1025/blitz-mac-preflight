@@ -160,18 +160,21 @@ private struct AppPricingSection: View {
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Toggle("", isOn: $isFree)
-                    .labelsHidden()
-                    .onChange(of: isFree) { _, newValue in
-                        if newValue {
-                            isSaving = true
-                            selectedPricePointId = ""
-                            Task {
-                                await asc.setPriceFree()
-                                isSaving = false
-                            }
+                Toggle("", isOn: Binding(
+                    get: { isFree },
+                    set: { newValue in
+                        guard newValue != isFree else { return }
+                        isFree = newValue
+                        guard newValue else { return }
+                        isSaving = true
+                        selectedPricePointId = ""
+                        Task {
+                            await asc.setPriceFree()
+                            isSaving = false
                         }
                     }
+                ))
+                    .labelsHidden()
             }
 
             if !isFree {
@@ -223,19 +226,53 @@ private struct AppPricingSection: View {
                 }
             }
         }
+        .onAppear { syncFromASC() }
+        .onChange(of: asc.currentAppPricePointId) { _, _ in syncFromASC() }
+        .onChange(of: asc.scheduledAppPricePointId) { _, _ in syncFromASC() }
+        .onChange(of: asc.scheduledAppPriceEffectiveDate) { _, _ in syncFromASC() }
+        .onChange(of: asc.appPricePoints.count) { _, _ in syncFromASC() }
     }
 
     private var freePointId: String {
-        asc.appPricePoints.first(where: {
-            let p = $0.attributes.customerPrice ?? "0"
-            return p == "0" || p == "0.0" || p == "0.00"
-        })?.id ?? ""
+        asc.freeAppPricePointId ?? ""
     }
 
     private func formatDate(_ date: Date) -> String {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd"
         return fmt.string(from: date)
+    }
+
+    private func syncFromASC() {
+        let resolvedCurrentId = asc.currentAppPricePointId
+            ?? ((asc.monetizationStatus == "Free" && !freePointId.isEmpty) ? freePointId : nil)
+
+        if let resolvedCurrentId, !resolvedCurrentId.isEmpty {
+            let currentlyFree = resolvedCurrentId == freePointId || asc.isFreePricePoint(resolvedCurrentId)
+            isFree = currentlyFree
+            selectedPricePointId = currentlyFree ? "" : resolvedCurrentId
+        } else {
+            let currentlyFree = asc.monetizationStatus != "Configured"
+            isFree = currentlyFree
+            if currentlyFree {
+                selectedPricePointId = ""
+            }
+        }
+
+        if let scheduledPricePointId = asc.scheduledAppPricePointId {
+            self.scheduledPricePointId = scheduledPricePointId
+            showScheduled = true
+        }
+        if let effectiveDate = asc.scheduledAppPriceEffectiveDate,
+           let parsedDate = parseDate(effectiveDate) {
+            scheduledDate = parsedDate
+        }
+    }
+
+    private func parseDate(_ value: String) -> Date? {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        return fmt.date(from: value)
     }
 }
 

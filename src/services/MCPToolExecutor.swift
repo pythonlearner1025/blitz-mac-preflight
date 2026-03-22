@@ -1,6 +1,5 @@
 import Foundation
 import AppKit
-import CryptoKit
 import Security
 
 /// Runs an async operation with a timeout. Throws CancellationError if the deadline is exceeded.
@@ -950,79 +949,14 @@ actor MCPToolExecutor {
             ])
         }
 
-        do {
-            let email = try storeASCWebSession(session)
-            return mcpJSON([
-                "success": true,
-                "email": email,
-                "message": "Web session authenticated and saved to keychain. The asc-iap-attach skill can now use the iris API."
-            ])
-        } catch {
-            return mcpJSON([
-                "success": false,
-                "message": "Authenticated, but failed to save the ASC web session: \(error.localizedDescription)"
-            ])
-        }
-    }
-
-    private func storeASCWebSession(_ session: IrisSession) throws -> String {
-        var cookiesByDomain: [String: [[String: Any]]] = [:]
-        for cookie in session.cookies {
-            let domainKey = cookie.domain.hasPrefix(".") ? String(cookie.domain.dropFirst()) : cookie.domain
-            cookiesByDomain[domainKey, default: []].append([
-                "name": cookie.name,
-                "value": cookie.value,
-                "domain": cookie.domain,
-                "path": cookie.path,
-                "secure": true,
-                "http_only": true,
-            ])
-        }
-
-        let normalizedEmail = (session.email ?? "unknown")
-            .lowercased()
-            .trimmingCharacters(in: .whitespaces)
-        let hashBytes = SHA256.hash(data: Data(normalizedEmail.utf8))
-        let hashString = hashBytes.map { String(format: "%02x", $0) }.joined()
-
-        let sessionEntry: [String: Any] = [
-            "version": 1,
-            "updated_at": ISO8601DateFormatter().string(from: Date()),
-            "cookies": cookiesByDomain,
-        ]
-
-        let store: [String: Any] = [
-            "version": 1,
-            "last_key": hashString,
-            "sessions": [hashString: sessionEntry],
-        ]
-
-        let data = try JSONSerialization.data(withJSONObject: store)
-        let deleteQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "asc-web-session",
-            kSecAttrAccount as String: "asc:web-session:store",
-        ]
-        SecItemDelete(deleteQuery as CFDictionary)
-
-        let addQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "asc-web-session",
-            kSecAttrAccount as String: "asc:web-session:store",
-            kSecAttrLabel as String: "ASC Web Session Store",
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked,
-        ]
-        let status = SecItemAdd(addQuery as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw NSError(
-                domain: "ASCWebSessionStore",
-                code: Int(status),
-                userInfo: [NSLocalizedDescriptionKey: "Keychain write failed (status: \(status))"]
-            )
-        }
-
-        return session.email ?? "unknown"
+        // setIrisSession (called by the login sheet callback) already saves to
+        // both keychain stores (native + asc-web-session), so no extra work needed.
+        let email = session.email ?? "unknown"
+        return mcpJSON([
+            "success": true,
+            "email": email,
+            "message": "Web session authenticated and saved to keychain. The asc-iap-attach skill can now use the iris API."
+        ])
     }
 
     private func executeASCSetAppPrice(_ args: [String: Any]) async throws -> [String: Any] {
@@ -1042,17 +976,33 @@ actor MCPToolExecutor {
         if let priceVal = Double(priceStr), priceVal < 0.001 {
             try await service.setPriceFree(appId: appId)
             try await service.ensureAppAvailability(appId: appId)
-            await MainActor.run { appState.ascManager.monetizationStatus = "Free" }
+            await MainActor.run {
+                appState.ascManager.currentAppPricePointId = appState.ascManager.freeAppPricePointId
+                appState.ascManager.scheduledAppPricePointId = nil
+                appState.ascManager.scheduledAppPriceEffectiveDate = nil
+                appState.ascManager.monetizationStatus = "Free"
+            }
+            await appState.ascManager.refreshTabData(.monetization)
             return mcpJSON(["success": true, "price": "0.00", "message": "App set to free with territory availability configured"])
         }
 
         // Fetch price points and find matching one
         let pricePoints = try await service.fetchAppPricePoints(appId: appId)
         guard let match = pricePoints.first(where: { Self.priceMatches($0.attributes.customerPrice, target: priceStr) }) else {
-            let available = pricePoints.compactMap { $0.attributes.customerPrice }
-                .filter { Double($0) ?? 0 > 0 }
-                .prefix(20)
-            return mcpText("Error: no price point matching $\(priceStr). Available: \(available.joined(separator: ", "))")
+            let sorted = pricePoints.compactMap { $0.attributes.customerPrice }
+                .compactMap { Double($0) }
+                .filter { $0 > 0 }
+                .sorted()
+            let samples = sorted.count <= 30 ? sorted : {
+                // Show a spread: lowest 5, some mid-range, highest 5
+                let lo = Array(sorted.prefix(5))
+                let hi = Array(sorted.suffix(5))
+                let step = max(1, (sorted.count - 10) / 10)
+                let mid = stride(from: 5, to: sorted.count - 5, by: step).map { sorted[$0] }
+                return lo + mid + hi
+            }()
+            let formatted = samples.map { String(format: "%.2f", $0) }
+            return mcpText("Error: no price point matching $\(priceStr). \(sorted.count) tiers available, samples: \(formatted.joined(separator: ", "))")
         }
 
         if let effectiveDate {
@@ -1070,13 +1020,25 @@ actor MCPToolExecutor {
                 effectiveDate: effectiveDate
             )
             try await service.ensureAppAvailability(appId: appId)
-            await MainActor.run { appState.ascManager.monetizationStatus = "Configured" }
+            await MainActor.run {
+                appState.ascManager.currentAppPricePointId = currentId
+                appState.ascManager.scheduledAppPricePointId = match.id
+                appState.ascManager.scheduledAppPriceEffectiveDate = effectiveDate
+                appState.ascManager.monetizationStatus = "Configured"
+            }
+            await appState.ascManager.refreshTabData(.monetization)
             return mcpJSON(["success": true, "price": priceStr, "effectiveDate": effectiveDate, "message": "Scheduled price change for \(effectiveDate) with territory availability configured"])
         }
 
         try await service.setAppPrice(appId: appId, pricePointId: match.id)
         try await service.ensureAppAvailability(appId: appId)
-        await MainActor.run { appState.ascManager.monetizationStatus = "Configured" }
+        await MainActor.run {
+            appState.ascManager.currentAppPricePointId = match.id
+            appState.ascManager.scheduledAppPricePointId = nil
+            appState.ascManager.scheduledAppPriceEffectiveDate = nil
+            appState.ascManager.monetizationStatus = "Configured"
+        }
+        await appState.ascManager.refreshTabData(.monetization)
         return mcpJSON(["success": true, "price": priceStr, "pricePointId": match.id])
     }
 

@@ -529,6 +529,40 @@ struct ASCPriceScheduleEntry: Decodable, Identifiable {
     let id: String
 }
 
+struct ASCResourceIdentifier: Decodable {
+    let id: String
+    let type: String?
+}
+
+struct ASCToOneRelationship: Decodable {
+    let data: ASCResourceIdentifier?
+}
+
+struct ASCAppPrice: Decodable, Identifiable {
+    let id: String
+    let attributes: Attributes?
+    let relationships: Relationships?
+
+    struct Attributes: Decodable {
+        let startDate: String?
+        let endDate: String?
+    }
+
+    struct Relationships: Decodable {
+        let appPricePoint: ASCToOneRelationship?
+    }
+
+    var appPricePointId: String? { relationships?.appPricePoint?.data?.id }
+    var startDate: String? { attributes?.startDate }
+    var endDate: String? { attributes?.endDate }
+}
+
+struct ASCAppPricingState {
+    let currentPricePointId: String?
+    let scheduledPricePointId: String?
+    let scheduledEffectiveDate: String?
+}
+
 // MARK: - Territory
 
 struct ASCTerritory: Decodable, Identifiable {

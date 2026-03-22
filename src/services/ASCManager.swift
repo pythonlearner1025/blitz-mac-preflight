@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import ImageIO
 import Security
+import CryptoKit
 
 // MARK: - Screenshot Track Models
 
@@ -58,6 +59,9 @@ final class ASCManager {
     var subscriptionGroups: [ASCSubscriptionGroup] = []
     var subscriptionsPerGroup: [String: [ASCSubscription]] = [:]  // groupId → subs
     var appPricePoints: [ASCPricePoint] = []  // USA price tiers for the app
+    var currentAppPricePointId: String?
+    var scheduledAppPricePointId: String?
+    var scheduledAppPriceEffectiveDate: String?
 
     // Creation progress (survives tab switches)
     var createProgress: Double = 0
@@ -339,6 +343,9 @@ final class ASCManager {
         subscriptionGroups = []
         subscriptionsPerGroup = [:]
         appPricePoints = []
+        currentAppPricePointId = nil
+        scheduledAppPricePointId = nil
+        scheduledAppPriceEffectiveDate = nil
         appInfo = nil
         appInfoLocalization = nil
         ageRatingDeclaration = nil
@@ -426,7 +433,7 @@ final class ASCManager {
         irisLog("ASCManager.setIrisSession: \(session.cookies.count) cookies")
         do {
             try session.save()
-            irisLog("ASCManager.setIrisSession: saved to disk")
+            irisLog("ASCManager.setIrisSession: saved to native keychain")
         } catch {
             irisLog("ASCManager.setIrisSession: save FAILED: \(error)")
             irisFeedbackError = "Failed to save session: \(error.localizedDescription)"
@@ -435,6 +442,10 @@ final class ASCManager {
             pendingWebAuthContinuation = nil
             return
         }
+
+        // Also write the asc-web-session keychain item used by CLI skill scripts
+        Self.storeWebSessionToKeychain(session)
+
         irisSession = session
         irisService = IrisService(session: session)
         irisSessionState = .valid
@@ -451,6 +462,7 @@ final class ASCManager {
     func clearIrisSession() {
         irisLog("ASCManager.clearIrisSession")
         IrisSession.delete()
+        Self.deleteWebSessionFromKeychain()
         irisSession = nil
         irisService = nil
         irisSessionState = .noSession
@@ -460,6 +472,71 @@ final class ASCManager {
         if let appId = app?.id {
             rebuildSubmissionHistory(appId: appId)
         }
+    }
+
+    // MARK: - Unified Web Session Keychain (for CLI skill scripts)
+
+    private static let webSessionService = "asc-web-session"
+    private static let webSessionAccount = "asc:web-session:store"
+
+    /// Write session cookies in the format expected by CLI skill scripts
+    /// (readable via `security find-generic-password -s "asc-web-session" -w`).
+    private static func storeWebSessionToKeychain(_ session: IrisSession) {
+        var cookiesByDomain: [String: [[String: Any]]] = [:]
+        for cookie in session.cookies {
+            let domainKey = cookie.domain.hasPrefix(".") ? String(cookie.domain.dropFirst()) : cookie.domain
+            cookiesByDomain[domainKey, default: []].append([
+                "name": cookie.name,
+                "value": cookie.value,
+                "domain": cookie.domain,
+                "path": cookie.path,
+                "secure": true,
+                "http_only": true,
+            ])
+        }
+
+        let normalizedEmail = (session.email ?? "unknown")
+            .lowercased()
+            .trimmingCharacters(in: .whitespaces)
+        let hashBytes = SHA256.hash(data: Data(normalizedEmail.utf8))
+        let hashString = hashBytes.map { String(format: "%02x", $0) }.joined()
+
+        let sessionEntry: [String: Any] = [
+            "version": 1,
+            "updated_at": ISO8601DateFormatter().string(from: Date()),
+            "cookies": cookiesByDomain,
+        ]
+
+        let store: [String: Any] = [
+            "version": 1,
+            "last_key": hashString,
+            "sessions": [hashString: sessionEntry],
+        ]
+
+        guard let data = try? JSONSerialization.data(withJSONObject: store) else {
+            return
+        }
+
+        deleteWebSessionFromKeychain()
+
+        let addQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: webSessionService,
+            kSecAttrAccount as String: webSessionAccount,
+            kSecAttrLabel as String: "ASC Web Session Store",
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked,
+        ]
+        SecItemAdd(addQuery as CFDictionary, nil)
+    }
+
+    private static func deleteWebSessionFromKeychain() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: webSessionService,
+            kSecAttrAccount as String: webSessionAccount,
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 
     /// Loads cached feedback from disk for the given rejected version. No auth needed.
@@ -860,16 +937,22 @@ final class ASCManager {
 
     // MARK: - App Fetch
 
-    func fetchApp(bundleId: String) async {
-        guard let service else { return }
+    @discardableResult
+    func fetchApp(bundleId: String, exactName: String? = nil) async -> Bool {
+        guard let service else { return false }
         isLoadingApp = true
         do {
-            let fetched = try await service.fetchApp(bundleId: bundleId)
+            let fetched = try await service.fetchApp(bundleId: bundleId, exactName: exactName)
             app = fetched
+            credentialsError = nil
+            isLoadingApp = false
+            return true
         } catch {
+            app = nil
             credentialsError = error.localizedDescription
+            isLoadingApp = false
+            return false
         }
-        isLoadingApp = false
     }
 
     // MARK: - Tab Data
@@ -1015,12 +1098,15 @@ final class ASCManager {
 
         case .monetization:
             appPricePoints = try await service.fetchAppPricePoints(appId: appId)
+            let pricingState = (try? await service.fetchAppPricingState(appId: appId))
+                ?? ASCAppPricingState(currentPricePointId: nil, scheduledPricePointId: nil, scheduledEffectiveDate: nil)
+            applyAppPricingState(pricingState)
             inAppPurchases = try await service.fetchInAppPurchases(appId: appId)
             subscriptionGroups = try await service.fetchSubscriptionGroups(appId: appId)
             for group in subscriptionGroups {
                 subscriptionsPerGroup[group.id] = try await service.fetchSubscriptionsInGroup(groupId: group.id)
             }
-            if monetizationStatus == nil {
+            if currentAppPricePointId == nil && scheduledAppPricePointId == nil && monetizationStatus == nil {
                 let hasPricing = await service.fetchPricingConfigured(appId: appId)
                 monetizationStatus = hasPricing ? "Configured" : nil
             }
@@ -1165,7 +1251,10 @@ final class ASCManager {
         do {
             try await service.setAppPrice(appId: appId, pricePointId: pricePointId)
             try await service.ensureAppAvailability(appId: appId)
-            monetizationStatus = "Configured"
+            currentAppPricePointId = pricePointId
+            scheduledAppPricePointId = nil
+            scheduledAppPriceEffectiveDate = nil
+            monetizationStatus = isFreePricePoint(pricePointId) ? "Free" : "Configured"
         } catch {
             writeError = error.localizedDescription
         }
@@ -1182,6 +1271,9 @@ final class ASCManager {
                 futurePricePointId: futurePricePointId,
                 effectiveDate: effectiveDate
             )
+            self.currentAppPricePointId = currentPricePointId
+            scheduledAppPricePointId = futurePricePointId
+            scheduledAppPriceEffectiveDate = effectiveDate
             monetizationStatus = "Configured"
         } catch {
             writeError = error.localizedDescription
@@ -1629,10 +1721,43 @@ final class ASCManager {
         do {
             try await service.setPriceFree(appId: appId)
             try await service.ensureAppAvailability(appId: appId)
+            currentAppPricePointId = freeAppPricePointId
+            scheduledAppPricePointId = nil
+            scheduledAppPriceEffectiveDate = nil
             monetizationStatus = "Free"
         } catch {
             writeError = error.localizedDescription
         }
+    }
+
+    var freeAppPricePointId: String? {
+        appPricePoints.first(where: {
+            let price = $0.attributes.customerPrice ?? "0"
+            return price == "0" || price == "0.0" || price == "0.00"
+        })?.id
+    }
+
+    func applyAppPricingState(_ state: ASCAppPricingState) {
+        currentAppPricePointId = state.currentPricePointId
+        scheduledAppPricePointId = state.scheduledPricePointId
+        scheduledAppPriceEffectiveDate = state.scheduledEffectiveDate
+
+        if let currentPricePointId = currentAppPricePointId {
+            let isCurrentlyFree = isFreePricePoint(currentPricePointId)
+            monetizationStatus = (isCurrentlyFree && state.scheduledPricePointId == nil) ? "Free" : "Configured"
+        } else if state.scheduledPricePointId != nil {
+            monetizationStatus = "Configured"
+        } else {
+            monetizationStatus = nil
+        }
+    }
+
+    func isFreePricePoint(_ pricePointId: String) -> Bool {
+        appPricePoints.contains(where: {
+            guard $0.id == pricePointId else { return false }
+            let price = $0.attributes.customerPrice ?? "0"
+            return price == "0" || price == "0.0" || price == "0.00"
+        })
     }
 
     // MARK: - Screenshot Track
