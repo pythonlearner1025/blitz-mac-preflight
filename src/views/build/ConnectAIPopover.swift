@@ -1,15 +1,43 @@
 import SwiftUI
 
+enum AIAgent: String, CaseIterable {
+    case claudeCode = "claude-code"
+    case codex = "codex"
+    case opencode = "opencode"
+
+    var displayName: String {
+        switch self {
+        case .claudeCode: return "Claude Code"
+        case .codex: return "Codex"
+        case .opencode: return "OpenCode"
+        }
+    }
+
+    var cliCommand: String {
+        switch self {
+        case .claudeCode: return "claude"
+        case .codex: return "codex"
+        case .opencode: return "opencode"
+        }
+    }
+}
+
 struct ConnectAIPopover: View {
     let projectPath: String?
     let activeTab: AppTab
 
+    @AppStorage("selectedAIAgent") private var selectedAgent: String = AIAgent.claudeCode.rawValue
     @State private var copiedCommand = false
     @State private var copiedPrompt = false
 
+    private var agent: AIAgent {
+        AIAgent(rawValue: selectedAgent) ?? .claudeCode
+    }
+
     private var command: String {
-        guard let path = projectPath else { return "claude" }
-        return "cd \(path) && claude"
+        let cli = agent.cliCommand
+        guard let path = projectPath else { return cli }
+        return "cd \(path) && \(cli)"
     }
 
     private var tabPrompt: String? {
@@ -56,9 +84,11 @@ struct ConnectAIPopover: View {
             Text("Connect AI")
                 .font(.headline)
 
-            // Agent type selector (only Claude Code for now)
-            Picker("Agent", selection: .constant("claude-code")) {
-                Text("Claude Code").tag("claude-code")
+            // Agent type selector
+            Picker("Agent", selection: $selectedAgent) {
+                ForEach(AIAgent.allCases, id: \.rawValue) { agent in
+                    Text(agent.displayName).tag(agent.rawValue)
+                }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -83,7 +113,7 @@ struct ConnectAIPopover: View {
                 .help("Copy to clipboard")
             }
 
-            Text("Run this in your terminal to connect Claude Code to this project.")
+            Text("Run this in your terminal to connect \(agent.displayName) to this project.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

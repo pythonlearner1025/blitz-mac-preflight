@@ -25,8 +25,14 @@ struct BundleIDSetupView: View {
     @State private var capabilitiesEnabled = 0
     @State private var showAdditional = false
 
-    // Auto-create via Claude Code
+    // Auto-create via AI agent
+    @AppStorage("selectedAIAgent") private var selectedAgentRaw: String = AIAgent.claudeCode.rawValue
     @State private var showAppleIDLogin = false
+
+    private var selectedAgent: AIAgent {
+        AIAgent(rawValue: selectedAgentRaw) ?? .claudeCode
+    }
+    private var selectedAgentName: String { selectedAgent.displayName }
 
     // Capabilities supported by the ASC API (can be enabled automatically)
     private static let capabilities: [(type: String, name: String)] = [
@@ -332,7 +338,7 @@ struct BundleIDSetupView: View {
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "sparkles")
-                    Text("Automatically create using Claude Code")
+                    Text("Automatically create using \(selectedAgentName)")
                 }
                 .font(.callout)
             }
@@ -612,7 +618,7 @@ struct BundleIDSetupView: View {
         }
 
         // Escape for AppleScript double-quote context: escape \ and "
-        let asBody = "\(cdCommand)claude '\(escapedPrompt)'"
+        let asBody = "\(cdCommand)\(selectedAgent.cliCommand) '\(escapedPrompt)'"
         let escapedAS = asBody
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")

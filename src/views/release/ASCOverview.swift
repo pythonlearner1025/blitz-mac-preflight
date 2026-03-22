@@ -139,6 +139,15 @@ struct ASCOverview: View {
                     HStack {
                         Text("Submission Readiness")
                             .font(.headline)
+
+                        Button {
+                            Task { await asc.refreshTabData(.ascOverview) }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Refresh submission readiness")
+
                         Spacer()
                         let versionState = asc.appStoreVersions.first(where: {
                             let s = $0.attributes.appStoreState ?? ""

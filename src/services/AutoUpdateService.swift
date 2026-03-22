@@ -10,6 +10,7 @@ final class AutoUpdateManager {
     enum State: Equatable {
         case idle
         case checking
+        case upToDate
         case available(version: String, releaseNotes: String)
         case downloading(percent: Int)
         case installing
@@ -26,7 +27,7 @@ final class AutoUpdateManager {
     /// True when the update UI should cover the entire welcome window.
     var showsFullScreenOverlay: Bool {
         switch state {
-        case .idle, .checking: return false
+        case .idle, .checking, .upToDate: return false
         default: return true
         }
     }
@@ -74,7 +75,7 @@ final class AutoUpdateManager {
 
             guard Self.isNewer(remote: remoteVersion, current: currentVersion) else {
                 print("[AutoUpdate] Up to date (current: \(currentVersion), remote: \(remoteVersion))")
-                state = .idle
+                state = .upToDate
                 return
             }
 
@@ -150,17 +151,20 @@ final class AutoUpdateManager {
         process.standardError = nil
 
         try process.run()
-        process.waitUntilExit()
+
+        // Wait off the main thread so the runloop stays responsive
+        let status = await Task.detached { () -> Int32 in
+            process.waitUntilExit()
+            return process.terminationStatus
+        }.value
 
         try? FileManager.default.removeItem(at: pkgPath)
 
-        guard process.terminationStatus == 0 else {
-            throw UpdateError(message: "Installation failed (exit code \(process.terminationStatus))")
+        guard status == 0 else {
+            throw UpdateError(message: "Installation failed (exit code \(status))")
         }
 
-        await MainActor.run {
-            NSApplication.shared.terminate(nil)
-        }
+        terminateApp()
     }
 
     private func installApp(zipPath: URL) async throws {
@@ -199,15 +203,27 @@ final class AutoUpdateManager {
         process.standardError = nil
 
         try process.run()
-        process.waitUntilExit()
 
-        guard process.terminationStatus == 0 else {
-            throw UpdateError(message: "Installation failed (exit code \(process.terminationStatus))")
+        // Wait off the main thread so the runloop stays responsive
+        let status = await Task.detached { () -> Int32 in
+            process.waitUntilExit()
+            return process.terminationStatus
+        }.value
+
+        guard status == 0 else {
+            throw UpdateError(message: "Installation failed (exit code \(status))")
         }
 
-        // Exit the current app so the background relaunch can kick in
-        await MainActor.run {
-            NSApplication.shared.terminate(nil)
+        terminateApp()
+    }
+
+    /// Force-quit the app so the background relaunch script can kick in.
+    /// Uses exit(0) as a fallback in case terminate(nil) is blocked by the app delegate.
+    private func terminateApp() {
+        NSApplication.shared.terminate(nil)
+        // If terminate didn't exit (e.g. delegate intercepted it), force quit after a short delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            exit(0)
         }
     }
 

@@ -64,13 +64,7 @@ struct SettingsView: View {
             MCPSetupSection(mcpServer: mcpServer)
 
             Section("Updates") {
-                UpdateBanner(autoUpdate: appState.autoUpdate)
-
-                if case .idle = appState.autoUpdate.state {
-                    Button("Check for Updates") {
-                        Task { await appState.autoUpdate.checkForUpdate() }
-                    }
-                }
+                UpdateSettingsRow(autoUpdate: appState.autoUpdate)
             }
 
             Section {

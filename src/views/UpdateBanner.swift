@@ -13,16 +13,21 @@ struct UpdateOverlay: View {
                 .fill(.ultraThinMaterial)
                 .ignoresSafeArea()
 
-            card
+            UpdateCardContent(autoUpdate: autoUpdate)
                 .frame(width: 420)
                 .padding(32)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
                 .shadow(color: .black.opacity(0.2), radius: 24, y: 8)
         }
     }
+}
+
+/// Reusable update card content used by both UpdateOverlay and UpdateSettingsRow sheet.
+struct UpdateCardContent: View {
+    @Bindable var autoUpdate: AutoUpdateManager
 
     @ViewBuilder
-    private var card: some View {
+    var body: some View {
         switch autoUpdate.state {
         case .available(let version, let notes):
             VStack(spacing: 16) {
@@ -148,110 +153,111 @@ struct UpdateOverlay: View {
     }
 }
 
-// MARK: - Compact banner (SettingsView)
+// MARK: - Settings row with sheet
 
-/// Small inline update banner used in Settings.
-struct UpdateBanner: View {
+/// Inline row for the Settings "Updates" section.
+/// Shows status + "Check for Updates" or "View Update" button.
+/// Active update/download/install states are shown in a closable sheet reusing UpdateOverlay.
+struct UpdateSettingsRow: View {
     @Bindable var autoUpdate: AutoUpdateManager
+    @State private var showUpdateSheet = false
 
     var body: some View {
         switch autoUpdate.state {
-        case .idle, .checking:
-            EmptyView()
-
-        case .available(let version, let notes):
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Image(systemName: "arrow.down.circle.fill")
-                        .foregroundStyle(.blue)
-                    Text("Update Available")
-                        .font(.headline)
-                    Spacer()
-                    Text("v\(version)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if !notes.isEmpty {
-                    ScrollView {
-                        Text(notes)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 80)
-                }
-
-                HStack {
-                    Button("Update Now") {
-                        Task { await autoUpdate.performUpdate() }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-
-                    Button("Later") {
-                        autoUpdate.dismiss()
-                    }
-                    .controlSize(.small)
-                }
+        case .idle:
+            Button("Check for Updates") {
+                Task { await autoUpdate.checkForUpdate() }
             }
-            .padding(12)
-            .background(Color.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.blue.opacity(0.2), lineWidth: 1))
 
-        case .downloading(let percent):
-            VStack(spacing: 6) {
-                HStack {
-                    Text("Downloading update...")
-                        .font(.caption)
-                    Spacer()
-                    if percent >= 0 {
-                        Text("\(percent)%")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                if percent >= 0 {
-                    ProgressView(value: Double(percent), total: 100)
-                        .progressViewStyle(.linear)
-                } else {
-                    ProgressView()
-                        .progressViewStyle(.linear)
-                }
-            }
-            .padding(12)
-            .background(Color.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-
-        case .installing:
+        case .checking:
             HStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.small)
-                Text("Installing update...")
-                    .font(.caption)
-            }
-            .padding(12)
-            .background(Color.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-
-        case .failed(let message):
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                    Text("Update failed")
-                        .font(.caption.weight(.medium))
-                }
-                Text(message)
-                    .font(.caption2)
+                Text("Checking for updates...")
+                    .font(.callout)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+            }
 
-                Button("Retry") {
-                    Task { await autoUpdate.performUpdate() }
+        case .upToDate:
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text("You're up to date")
+                    .font(.callout)
+                Spacer()
+                Button("Check Again") {
+                    Task { await autoUpdate.checkForUpdate() }
                 }
                 .controlSize(.small)
             }
-            .padding(12)
-            .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+
+        case .available(let version, _):
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .foregroundStyle(.blue)
+                Text("Update available")
+                    .font(.callout)
+                Text("v\(version)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("View Update") {
+                    showUpdateSheet = true
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+            .sheet(isPresented: $showUpdateSheet) {
+                updateSheet
+            }
+
+        case .downloading, .installing, .failed:
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text(statusLabel)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("View") {
+                    showUpdateSheet = true
+                }
+                .controlSize(.small)
+            }
+            .sheet(isPresented: $showUpdateSheet) {
+                updateSheet
+            }
+            .onAppear { showUpdateSheet = true }
         }
+    }
+
+    private var statusLabel: String {
+        switch autoUpdate.state {
+        case .downloading: return "Downloading..."
+        case .installing: return "Installing..."
+        case .failed: return "Update failed"
+        default: return ""
+        }
+    }
+
+    private var updateSheet: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                Button {
+                    showUpdateSheet = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding([.top, .trailing], 12)
+
+            UpdateCardContent(autoUpdate: autoUpdate)
+                .padding(24)
+        }
+        .frame(width: 480, height: 380)
     }
 }

@@ -940,6 +940,7 @@ actor MCPToolExecutor {
         if let priceVal = Double(priceStr), priceVal < 0.001 {
             try await service.setPriceFree(appId: appId)
             try await service.ensureAppAvailability(appId: appId)
+            await MainActor.run { appState.ascManager.monetizationStatus = "Free" }
             return mcpJSON(["success": true, "price": "0.00", "message": "App set to free with territory availability configured"])
         }
 
@@ -967,11 +968,13 @@ actor MCPToolExecutor {
                 effectiveDate: effectiveDate
             )
             try await service.ensureAppAvailability(appId: appId)
+            await MainActor.run { appState.ascManager.monetizationStatus = "Configured" }
             return mcpJSON(["success": true, "price": priceStr, "effectiveDate": effectiveDate, "message": "Scheduled price change for \(effectiveDate) with territory availability configured"])
         }
 
         try await service.setAppPrice(appId: appId, pricePointId: match.id)
         try await service.ensureAppAvailability(appId: appId)
+        await MainActor.run { appState.ascManager.monetizationStatus = "Configured" }
         return mcpJSON(["success": true, "price": priceStr, "pricePointId": match.id])
     }
 

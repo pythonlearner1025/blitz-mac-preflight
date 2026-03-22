@@ -739,6 +739,10 @@ final class ASCManager {
             guard let versionId = appStoreVersions.first?.id else { return }
             do {
                 try await service.patchVersion(id: versionId, fields: [field: value])
+                // Re-fetch versions so submissionReadiness picks up the new copyright
+                if let appId = app?.id {
+                    appStoreVersions = try await service.fetchAppStoreVersions(appId: appId)
+                }
             } catch {
                 writeError = error.localizedDescription
             }
