@@ -1,6 +1,6 @@
 #!/bin/bash
 # Blitz PKG Postinstall Script
-# Sets up ~/.blitz directory, installs toolchain (Node, Ruby, CocoaPods, Python, idb).
+# Sets up ~/.blitz directory and installs bundled toolchain pieces (Node, Ruby, CocoaPods, Python, idb).
 #
 # NOTE: The app itself (Blitz.app) is installed to /Applications by the PKG system,
 # NOT by this script. This script only handles post-installation setup.
@@ -160,14 +160,6 @@ fi
 echo "Node ready at: $NODE_DIR/node ($("$NODE_DIR/node" --version 2>/dev/null))" >> "$LOG"
 rm -f "$CONSOLE_HOME/.blitz/node-bin-path" 2>/dev/null || true
 
-# Install/update @blitzdev/iphone-mcp globally into the chosen Node runtime
-echo "Installing @blitzdev/iphone-mcp..." >> "$LOG"
-if run_as_user "$NODE_DIR/npm" install -g @blitzdev/iphone-mcp@latest >> "$LOG" 2>&1; then
-    echo "OK: iphone-mcp installed ($("$NODE_DIR/iphone-mcp" --version 2>/dev/null || echo 'unknown version'))" >> "$LOG"
-else
-    echo "WARNING: Failed to install @blitzdev/iphone-mcp" >> "$LOG"
-fi
-
 echo "TIMING: node install took $(( $(date +%s) - T_NODE_START ))s" >> "$LOG"
 
 if [ ! -d "$APP_DIR" ]; then
@@ -322,7 +314,6 @@ fi
 echo "Pod ready at: $POD_PATH ($($POD_PATH --version 2>/dev/null))" >> "$LOG"
 echo "TIMING: ruby + cocoapods took $(( $(date +%s) - T_RUBY_START ))s" >> "$LOG"
 
-
 # ============================================================================
 # Install Python 3 + idb (Facebook iOS Development Bridge)
 # ============================================================================
@@ -410,37 +401,6 @@ else
     fi
 fi
 echo "TIMING: python + idb took $(( $(date +%s) - T_IDB_START ))s" >> "$LOG"
-
-
-# ============================================================================
-# Clone WebDriverAgent (for physical iPhone support)
-# ============================================================================
-
-T_WDA_START=$(date +%s)
-WDA_BUILD_DIR="$CONSOLE_HOME/.blitz/wda-build"
-WDA_DIR="$WDA_BUILD_DIR/WebDriverAgent"
-
-if [ -f "$WDA_DIR/WebDriverAgent.xcodeproj/project.pbxproj" ]; then
-    echo "OK: WebDriverAgent already cloned at $WDA_DIR" >> "$LOG"
-else
-    echo "Cloning WebDriverAgent..." >> "$LOG"
-    show_progress "Downloading WebDriverAgent..."
-
-    mkdir -p "$WDA_BUILD_DIR"
-    if [ "$IS_ROOT" = true ]; then chown "$CONSOLE_USER" "$WDA_BUILD_DIR" 2>/dev/null || true; fi
-
-    if [ -d "$WDA_DIR" ]; then
-        rm -rf "$WDA_DIR" 2>/dev/null || true
-    fi
-
-    if run_as_user \
-        git clone --depth 1 https://github.com/appium/WebDriverAgent.git "$WDA_DIR" >> "$LOG" 2>&1; then
-        echo "WebDriverAgent cloned to $WDA_DIR" >> "$LOG"
-    else
-        echo "WARNING: Failed to clone WebDriverAgent (physical device support will require manual setup)" >> "$LOG"
-    fi
-fi
-echo "TIMING: WebDriverAgent clone took $(( $(date +%s) - T_WDA_START ))s" >> "$LOG"
 
 # ============================================================================
 # Launch Blitz.app

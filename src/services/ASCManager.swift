@@ -1,6 +1,8 @@
 import Foundation
 import AppKit
 import ImageIO
+import Security
+import CryptoKit
 
 // MARK: - Screenshot Track Models
 
@@ -57,6 +59,9 @@ final class ASCManager {
     var subscriptionGroups: [ASCSubscriptionGroup] = []
     var subscriptionsPerGroup: [String: [ASCSubscription]] = [:]  // groupId → subs
     var appPricePoints: [ASCPricePoint] = []  // USA price tiers for the app
+    var currentAppPricePointId: String?
+    var scheduledAppPricePointId: String?
+    var scheduledAppPriceEffectiveDate: String?
 
     // Creation progress (survives tab switches)
     var createProgress: Double = 0
@@ -69,6 +74,7 @@ final class ASCManager {
     var appInfoLocalization: ASCAppInfoLocalization?
     var ageRatingDeclaration: ASCAgeRatingDeclaration?
     var reviewDetail: ASCReviewDetail?
+    var pendingCredentialValues: [String: String]?  // Pre-fill values for ASC credential form (from MCP)
     var pendingFormValues: [String: [String: String]] = [:]  // tab → field → value (for MCP pre-fill)
     var pendingFormVersion: Int = 0  // Incremented when pendingFormValues changes; views watch this
     var pendingCreateValues: [String: String]?  // Pre-fill values for IAP/subscription create forms (from MCP)
@@ -79,7 +85,9 @@ final class ASCManager {
 
     // Review submission history (for rejection tracking)
     var reviewSubmissions: [ASCReviewSubmission] = []
+    var reviewSubmissionItemsBySubmissionId: [String: [ASCReviewSubmissionItem]] = [:]
     var latestSubmissionItems: [ASCReviewSubmissionItem] = []
+    var submissionHistoryEvents: [ASCSubmissionHistoryEvent] = []
 
     // Iris (Apple ID session) — rejection feedback from internal API
     enum IrisSessionState { case unknown, noSession, valid, expired }
@@ -89,8 +97,8 @@ final class ASCManager {
     var isLoadingIrisFeedback = false
     var irisFeedbackError: String?
     var showAppleIDLogin = false
-    var webAuthMCPCallback: ((IrisSession) -> Void)?
-    var attachedIAPIds: Set<String> = []  // IAP/subscription IDs attached via iris API
+    private var pendingWebAuthContinuation: CheckedContinuation<IrisSession?, Never>?
+    var attachedSubmissionItemIDs: Set<String> = []  // IAP/subscription IDs attached via iris API
     var resolutionCenterThreads: [IrisResolutionCenterThread] = []
     var rejectionMessages: [IrisResolutionCenterMessage] = []
     var rejectionReasons: [IrisReviewRejection] = []
@@ -212,9 +220,9 @@ final class ASCManager {
         }
         let isFirstVersion = !hasApprovedVersion
         if isFirstVersion {
-            let readyIAPs = inAppPurchases.filter { $0.attributes.state == "READY_TO_SUBMIT" && !attachedIAPIds.contains($0.id) }
+            let readyIAPs = inAppPurchases.filter { $0.attributes.state == "READY_TO_SUBMIT" && !attachedSubmissionItemIDs.contains($0.id) }
             let readySubs = subscriptionsPerGroup.values.flatMap { $0 }
-                .filter { $0.attributes.state == "READY_TO_SUBMIT" && !attachedIAPIds.contains($0.id) }
+                .filter { $0.attributes.state == "READY_TO_SUBMIT" && !attachedSubmissionItemIDs.contains($0.id) }
             let readyCount = readyIAPs.count + readySubs.count
             if readyCount > 0 {
                 let names = (readyIAPs.map { $0.attributes.name ?? $0.attributes.productId ?? $0.id }
@@ -231,7 +239,8 @@ final class ASCManager {
                     hint: "\(readyCount) item(s) in Ready to Submit state (\(names)) must be attached to this version before submission. "
                         + "Use the asc-iap-attach skill to attach them via the iris API (asc web session). "
                         + "The public API does not support first-time IAP/subscription attachment — "
-                        + "run: asc web auth login, then POST to /iris/v1/subscriptionSubmissions with submitWithNextAppStoreVersion:true for each item."
+                        + "run: asc web auth login, then POST to /iris/v1/subscriptionSubmissions or /iris/v1/inAppPurchaseSubmissions "
+                        + "with submitWithNextAppStoreVersion:true for each item."
                 ))
             }
         }
@@ -284,6 +293,11 @@ final class ASCManager {
         }
     }
 
+    private func refreshAppIconStatusIfNeeded(for projectId: String?) {
+        guard let projectId, !projectId.isEmpty else { return }
+        checkAppIcon(projectId: projectId)
+    }
+
     // MARK: - Project Lifecycle
 
     func loadCredentials(for projectId: String, bundleId: String?) async {
@@ -297,6 +311,7 @@ final class ASCManager {
         credentials = creds
         isLoadingCredentials = false
         loadedProjectId = projectId
+        refreshAppIconStatusIfNeeded(for: projectId)
 
         if let creds {
             service = AppStoreConnectService(credentials: creds)
@@ -328,6 +343,9 @@ final class ASCManager {
         subscriptionGroups = []
         subscriptionsPerGroup = [:]
         appPricePoints = []
+        currentAppPricePointId = nil
+        scheduledAppPricePointId = nil
+        scheduledAppPriceEffectiveDate = nil
         appInfo = nil
         appInfoLocalization = nil
         ageRatingDeclaration = nil
@@ -337,8 +355,13 @@ final class ASCManager {
         isSubmitting = false
         submissionError = nil
         writeError = nil
+        reviewSubmissions = []
+        reviewSubmissionItemsBySubmissionId = [:]
+        latestSubmissionItems = []
+        submissionHistoryEvents = []
         appIconStatus = nil
         monetizationStatus = nil
+        attachedSubmissionItemIDs = []
         isLoadingTab = [:]
         tabError = [:]
         loadedTabs = []
@@ -350,6 +373,7 @@ final class ASCManager {
         cachedFeedback = nil
         isLoadingIrisFeedback = false
         irisFeedbackError = nil
+        cancelPendingWebAuth()
     }
 
     // MARK: - Iris Session (Apple ID auth for rejection feedback)
@@ -391,42 +415,145 @@ final class ASCManager {
         irisLog("ASCManager.loadIrisSession: session valid, irisService created")
     }
 
-    func showWebAuthForMCP(completion: @escaping (IrisSession) -> Void) {
-        webAuthMCPCallback = completion
+    func requestWebAuthForMCP() async -> IrisSession? {
+        pendingWebAuthContinuation?.resume(returning: nil)
+        irisFeedbackError = nil
         showAppleIDLogin = true
+        return await withCheckedContinuation { continuation in
+            pendingWebAuthContinuation = continuation
+        }
+    }
+
+    func cancelPendingWebAuth() {
+        showAppleIDLogin = false
+        pendingWebAuthContinuation?.resume(returning: nil)
+        pendingWebAuthContinuation = nil
     }
 
     func setIrisSession(_ session: IrisSession) {
         irisLog("ASCManager.setIrisSession: \(session.cookies.count) cookies")
         do {
             try session.save()
-            irisLog("ASCManager.setIrisSession: saved to disk")
+            irisLog("ASCManager.setIrisSession: saved to native keychain")
         } catch {
             irisLog("ASCManager.setIrisSession: save FAILED: \(error)")
             irisFeedbackError = "Failed to save session: \(error.localizedDescription)"
+            showAppleIDLogin = false
+            pendingWebAuthContinuation?.resume(returning: nil)
+            pendingWebAuthContinuation = nil
             return
         }
+
+        // Also write the asc-web-session keychain item used by CLI skill scripts.
+        // If that write fails during an MCP-triggered login, keep the native session
+        // but fail the MCP request instead of reporting a false success.
+        do {
+            try Self.storeWebSessionToKeychain(session)
+        } catch {
+            irisLog("ASCManager.setIrisSession: asc-web-session save FAILED: \(error)")
+            irisFeedbackError = "Failed to save ASC web session: \(error.localizedDescription)"
+            if let continuation = pendingWebAuthContinuation {
+                pendingWebAuthContinuation = nil
+                continuation.resume(returning: nil)
+            }
+        }
+
         irisSession = session
         irisService = IrisService(session: session)
         irisSessionState = .valid
         irisLog("ASCManager.setIrisSession: state set to .valid")
+        showAppleIDLogin = false
 
         // Notify MCP tool if it triggered this login
-        if let callback = webAuthMCPCallback {
-            webAuthMCPCallback = nil
-            callback(session)
+        if let continuation = pendingWebAuthContinuation {
+            pendingWebAuthContinuation = nil
+            continuation.resume(returning: session)
         }
     }
 
     func clearIrisSession() {
         irisLog("ASCManager.clearIrisSession")
         IrisSession.delete()
+        Self.deleteWebSessionFromKeychain()
         irisSession = nil
         irisService = nil
         irisSessionState = .noSession
         resolutionCenterThreads = []
         rejectionMessages = []
         rejectionReasons = []
+        if let appId = app?.id {
+            rebuildSubmissionHistory(appId: appId)
+        }
+    }
+
+    // MARK: - Unified Web Session Keychain (for CLI skill scripts)
+
+    private static let webSessionService = "asc-web-session"
+    private static let webSessionAccount = "asc:web-session:store"
+
+    /// Write session cookies in the format expected by CLI skill scripts
+    /// (readable via `security find-generic-password -s "asc-web-session" -w`).
+    private static func storeWebSessionToKeychain(_ session: IrisSession) throws {
+        var cookiesByDomain: [String: [[String: Any]]] = [:]
+        for cookie in session.cookies {
+            let domainKey = cookie.domain.hasPrefix(".") ? String(cookie.domain.dropFirst()) : cookie.domain
+            cookiesByDomain[domainKey, default: []].append([
+                "name": cookie.name,
+                "value": cookie.value,
+                "domain": cookie.domain,
+                "path": cookie.path,
+                "secure": true,
+                "http_only": true,
+            ])
+        }
+
+        let normalizedEmail = (session.email ?? "unknown")
+            .lowercased()
+            .trimmingCharacters(in: .whitespaces)
+        let hashBytes = SHA256.hash(data: Data(normalizedEmail.utf8))
+        let hashString = hashBytes.map { String(format: "%02x", $0) }.joined()
+
+        let sessionEntry: [String: Any] = [
+            "version": 1,
+            "updated_at": ISO8601DateFormatter().string(from: Date()),
+            "cookies": cookiesByDomain,
+        ]
+
+        let store: [String: Any] = [
+            "version": 1,
+            "last_key": hashString,
+            "sessions": [hashString: sessionEntry],
+        ]
+
+        let data = try JSONSerialization.data(withJSONObject: store)
+
+        deleteWebSessionFromKeychain()
+
+        let addQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: webSessionService,
+            kSecAttrAccount as String: webSessionAccount,
+            kSecAttrLabel as String: "ASC Web Session Store",
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked,
+        ]
+        let status = SecItemAdd(addQuery as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw NSError(
+                domain: "ASCWebSessionStore",
+                code: Int(status),
+                userInfo: [NSLocalizedDescriptionKey: "Keychain write failed (status: \(status))"]
+            )
+        }
+    }
+
+    private static func deleteWebSessionFromKeychain() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: webSessionService,
+            kSecAttrAccount as String: webSessionAccount,
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 
     /// Loads cached feedback from disk for the given rejected version. No auth needed.
@@ -439,6 +566,7 @@ final class ASCManager {
             irisLog("ASCManager.loadCachedFeedback: no cache found")
             cachedFeedback = nil
         }
+        rebuildSubmissionHistory(appId: appId)
     }
 
     func fetchRejectionFeedback() async {
@@ -499,6 +627,7 @@ final class ASCManager {
         }
 
         isLoadingIrisFeedback = false
+        rebuildSubmissionHistory(appId: appId)
         irisLog("ASCManager.fetchRejectionFeedback: done")
     }
 
@@ -528,6 +657,282 @@ final class ASCManager {
         )
     }
 
+    private func refreshReviewSubmissionData(appId: String, service: AppStoreConnectService) async {
+        let submissions = (try? await service.fetchReviewSubmissions(appId: appId)) ?? []
+        reviewSubmissions = submissions
+
+        guard !submissions.isEmpty else {
+            reviewSubmissionItemsBySubmissionId = [:]
+            latestSubmissionItems = []
+            return
+        }
+
+        var itemsBySubmissionId: [String: [ASCReviewSubmissionItem]] = [:]
+        await withTaskGroup(of: (String, [ASCReviewSubmissionItem]).self) { group in
+            for submission in submissions {
+                group.addTask {
+                    let items = (try? await service.fetchReviewSubmissionItems(submissionId: submission.id)) ?? []
+                    return (submission.id, items)
+                }
+            }
+
+            for await (submissionId, items) in group {
+                itemsBySubmissionId[submissionId] = items
+            }
+        }
+
+        reviewSubmissionItemsBySubmissionId = itemsBySubmissionId
+        latestSubmissionItems = itemsBySubmissionId[submissions.first?.id ?? ""] ?? []
+    }
+
+    private func historyNowString() -> String {
+        ISO8601DateFormatter().string(from: Date())
+    }
+
+    private func historyDate(_ iso: String?) -> Date {
+        guard let iso else { return .distantPast }
+        let f1 = ISO8601DateFormatter()
+        f1.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let f2 = ISO8601DateFormatter()
+        return f1.date(from: iso) ?? f2.date(from: iso) ?? .distantPast
+    }
+
+    private func historyEventType(forVersionState state: String) -> ASCSubmissionHistoryEventType? {
+        switch state {
+        case "WAITING_FOR_REVIEW":
+            return .submitted
+        case "IN_REVIEW":
+            return .inReview
+        case "PROCESSING":
+            return .processing
+        case "PENDING_DEVELOPER_RELEASE":
+            return .accepted
+        case "READY_FOR_SALE":
+            return .live
+        case "REJECTED":
+            return .rejected
+        case "DEVELOPER_REJECTED":
+            return .withdrawn
+        case "REMOVED_FROM_SALE", "DEVELOPER_REMOVED_FROM_SALE":
+            return .removed
+        default:
+            return nil
+        }
+    }
+
+    private func historyCoverageKey(
+        versionId: String?,
+        versionString: String,
+        eventType: ASCSubmissionHistoryEventType
+    ) -> String {
+        "\(versionId ?? "version:\(versionString)")::\(eventType.rawValue)"
+    }
+
+    private func versionString(
+        for versionId: String?,
+        versionSnapshots: [String: ASCSubmissionHistoryCache.VersionSnapshot]
+    ) -> String? {
+        guard let versionId else { return nil }
+        if let version = appStoreVersions.first(where: { $0.id == versionId }) {
+            return version.attributes.versionString
+        }
+        return versionSnapshots[versionId]?.versionString
+    }
+
+    private func versionId(
+        for versionString: String,
+        versionSnapshots: [String: ASCSubmissionHistoryCache.VersionSnapshot]
+    ) -> String? {
+        if let version = appStoreVersions.first(where: { $0.attributes.versionString == versionString }) {
+            return version.id
+        }
+        return versionSnapshots.values.first(where: { $0.versionString == versionString })?.versionId
+    }
+
+    private func refreshSubmissionHistoryCache(appId: String) -> ASCSubmissionHistoryCache {
+        var cache = ASCSubmissionHistoryCache.load(appId: appId)
+        let now = historyNowString()
+
+        for version in appStoreVersions {
+            let state = version.attributes.appStoreState ?? ""
+            guard !state.isEmpty else { continue }
+
+            if var snapshot = cache.versionSnapshots[version.id] {
+                snapshot.versionString = version.attributes.versionString
+                if snapshot.lastKnownState != state,
+                   let eventType = historyEventType(forVersionState: state) {
+                    cache.transitionEvents.append(
+                        ASCSubmissionHistoryEvent(
+                            id: "ledger:\(version.id):\(state):\(now)",
+                            versionId: version.id,
+                            versionString: version.attributes.versionString,
+                            eventType: eventType,
+                            appleState: state,
+                            occurredAt: now,
+                            source: .transitionLedger,
+                            accuracy: .firstSeen,
+                            submissionId: nil,
+                            note: nil
+                        )
+                    )
+                    snapshot.lastKnownState = state
+                    snapshot.lastSeenAt = now
+                } else {
+                    snapshot.lastSeenAt = now
+                }
+                cache.versionSnapshots[version.id] = snapshot
+            } else {
+                cache.versionSnapshots[version.id] = .init(
+                    versionId: version.id,
+                    versionString: version.attributes.versionString,
+                    lastKnownState: state,
+                    lastSeenAt: now
+                )
+            }
+        }
+
+        cache.transitionEvents.sort { historyDate($0.occurredAt) > historyDate($1.occurredAt) }
+        try? cache.save()
+        return cache
+    }
+
+    private func rebuildSubmissionHistory(appId: String) {
+        let cache = refreshSubmissionHistoryCache(appId: appId)
+        let versionSnapshots = cache.versionSnapshots
+
+        let submissionEvents = reviewSubmissions.compactMap { submission -> ASCSubmissionHistoryEvent? in
+            guard let submittedAt = submission.attributes.submittedDate else { return nil }
+            let versionId = reviewSubmissionItemsBySubmissionId[submission.id]?
+                .compactMap(\.appStoreVersionId)
+                .first
+            let versionString = versionString(for: versionId, versionSnapshots: versionSnapshots) ?? "Unknown"
+            return ASCSubmissionHistoryEvent(
+                id: "submission:\(submission.id)",
+                versionId: versionId,
+                versionString: versionString,
+                eventType: .submitted,
+                appleState: "WAITING_FOR_REVIEW",
+                occurredAt: submittedAt,
+                source: .reviewSubmission,
+                accuracy: .exact,
+                submissionId: submission.id,
+                note: nil
+            )
+        }
+
+        var rejectionEventsByVersion: [String: ASCSubmissionHistoryEvent] = [:]
+        for cacheEntry in IrisFeedbackCache.loadAll(appId: appId) {
+            let rejectionAt = cacheEntry.messages
+                .compactMap(\.date)
+                .sorted(by: { historyDate($0) < historyDate($1) })
+                .first
+                ?? ISO8601DateFormatter().string(from: cacheEntry.fetchedAt)
+
+            rejectionEventsByVersion[cacheEntry.versionString] = ASCSubmissionHistoryEvent(
+                id: "iris:\(cacheEntry.versionString):\(rejectionAt)",
+                versionId: versionId(for: cacheEntry.versionString, versionSnapshots: versionSnapshots),
+                versionString: cacheEntry.versionString,
+                eventType: .rejected,
+                appleState: "REJECTED",
+                occurredAt: rejectionAt,
+                source: .irisFeedback,
+                accuracy: .derived,
+                submissionId: nil,
+                note: cacheEntry.reasons.first?.section
+            )
+        }
+
+        if let rejectedVersion = appStoreVersions.first(where: { $0.attributes.appStoreState == "REJECTED" }) {
+            let rejectionAt = resolutionCenterThreads.first?.attributes.createdDate
+                ?? rejectionMessages.compactMap(\.attributes.createdDate)
+                    .sorted(by: { historyDate($0) < historyDate($1) })
+                    .first
+            if let rejectionAt {
+                rejectionEventsByVersion[rejectedVersion.attributes.versionString] = ASCSubmissionHistoryEvent(
+                    id: "iris-live:\(rejectedVersion.id):\(rejectionAt)",
+                    versionId: rejectedVersion.id,
+                    versionString: rejectedVersion.attributes.versionString,
+                    eventType: .rejected,
+                    appleState: "REJECTED",
+                    occurredAt: rejectionAt,
+                    source: .irisFeedback,
+                    accuracy: .derived,
+                    submissionId: nil,
+                    note: rejectionReasons.first?.attributes.reasons?.first?.reasonSection
+                )
+            }
+        }
+
+        let durableEvents = submissionEvents
+            + Array(rejectionEventsByVersion.values)
+            + cache.transitionEvents
+
+        let coveredEventKeys = Set(
+            durableEvents.map {
+                historyCoverageKey(versionId: $0.versionId, versionString: $0.versionString, eventType: $0.eventType)
+            }
+        )
+
+        let fallbackEvents = appStoreVersions.compactMap { version -> ASCSubmissionHistoryEvent? in
+            let state = version.attributes.appStoreState ?? ""
+            guard let eventType = historyEventType(forVersionState: state) else { return nil }
+
+            let coverageKey = historyCoverageKey(
+                versionId: version.id,
+                versionString: version.attributes.versionString,
+                eventType: eventType
+            )
+            guard !coveredEventKeys.contains(coverageKey) else { return nil }
+
+            let occurredAt = version.attributes.createdDate
+                ?? cache.versionSnapshots[version.id]?.lastSeenAt
+                ?? historyNowString()
+
+            return ASCSubmissionHistoryEvent(
+                id: "version:\(version.id):\(state)",
+                versionId: version.id,
+                versionString: version.attributes.versionString,
+                eventType: eventType,
+                appleState: state,
+                occurredAt: occurredAt,
+                source: .currentVersion,
+                accuracy: .derived,
+                submissionId: nil,
+                note: nil
+            )
+        }
+
+        submissionHistoryEvents = (durableEvents + fallbackEvents)
+            .sorted { lhs, rhs in
+                historyDate(lhs.occurredAt) > historyDate(rhs.occurredAt)
+            }
+    }
+
+    func refreshSubmissionFeedbackIfNeeded() {
+        guard let appId = app?.id else { return }
+
+        let rejectedVersion = appStoreVersions.first(where: {
+            $0.attributes.appStoreState == "REJECTED"
+        })
+        let pendingVersion = appStoreVersions.first(where: {
+            let state = $0.attributes.appStoreState ?? ""
+            return state != "READY_FOR_SALE" && state != "REMOVED_FROM_SALE"
+                && state != "DEVELOPER_REMOVED_FROM_SALE" && !state.isEmpty
+        })
+
+        guard let version = rejectedVersion ?? pendingVersion else {
+            cachedFeedback = nil
+            rebuildSubmissionHistory(appId: appId)
+            return
+        }
+
+        loadCachedFeedback(appId: appId, versionString: version.attributes.versionString)
+        loadIrisSession()
+        if irisSessionState == .valid {
+            Task { await fetchRejectionFeedback() }
+        }
+    }
+
     func saveCredentials(_ creds: ASCCredentials, projectId: String, bundleId: String?) async throws {
         try creds.save()
         credentials = creds
@@ -549,16 +954,22 @@ final class ASCManager {
 
     // MARK: - App Fetch
 
-    func fetchApp(bundleId: String) async {
-        guard let service else { return }
+    @discardableResult
+    func fetchApp(bundleId: String, exactName: String? = nil) async -> Bool {
+        guard let service else { return false }
         isLoadingApp = true
         do {
-            let fetched = try await service.fetchApp(bundleId: bundleId)
+            let fetched = try await service.fetchApp(bundleId: bundleId, exactName: exactName)
             app = fetched
+            credentialsError = nil
+            isLoadingApp = false
+            return true
         } catch {
+            app = nil
             credentialsError = error.localizedDescription
+            isLoadingApp = false
+            return false
         }
-        isLoadingApp = false
     }
 
     // MARK: - Tab Data
@@ -607,6 +1018,11 @@ final class ASCManager {
         }
     }
 
+    func refreshSubmissionReadinessData() async {
+        await refreshMonetization()
+        await refreshAttachedSubmissionItemIDs()
+    }
+
     private func loadData(for tab: AppTab, service: AppStoreConnectService) async throws {
         guard let appId = app?.id else {
             throw ASCError.notFound("App — check your bundle ID in project settings")
@@ -614,6 +1030,7 @@ final class ASCManager {
 
         switch tab {
         case .ascOverview:
+            refreshAppIconStatusIfNeeded(for: loadedProjectId)
             let versions = try await service.fetchAppStoreVersions(appId: appId)
             appStoreVersions = versions
             appInfo = try? await service.fetchAppInfo(appId: appId)
@@ -635,14 +1052,9 @@ final class ASCManager {
                 appInfoLocalization = try? await service.fetchAppInfoLocalization(appInfoId: infoId)
             }
             builds = try await service.fetchBuilds(appId: appId)
-            // Fetch review submission history (for rejection details)
-            let rejectedState = versions.first?.attributes.appStoreState
-            if rejectedState == "REJECTED" || rejectedState == "DEVELOPER_REJECTED" {
-                reviewSubmissions = (try? await service.fetchReviewSubmissions(appId: appId)) ?? []
-                if let latest = reviewSubmissions.first {
-                    latestSubmissionItems = (try? await service.fetchReviewSubmissionItems(submissionId: latest.id)) ?? []
-                }
-            }
+            await refreshReviewSubmissionData(appId: appId, service: service)
+            rebuildSubmissionHistory(appId: appId)
+            refreshSubmissionFeedbackIfNeeded()
 
             // Check monetization status — skip if already set (avoids race with in-flight fetches overwriting optimistic updates from setPriceFree/setAppPrice)
             if monetizationStatus == nil {
@@ -650,19 +1062,7 @@ final class ASCManager {
                 monetizationStatus = hasPricing ? "Configured" : nil
             }
 
-            // Fetch IAP/subscription data for submission readiness check
-            // (needed to detect first-time IAPs/subs that must be attached to the version)
-            if inAppPurchases.isEmpty {
-                inAppPurchases = (try? await service.fetchInAppPurchases(appId: appId)) ?? []
-            }
-            if subscriptionGroups.isEmpty {
-                subscriptionGroups = (try? await service.fetchSubscriptionGroups(appId: appId)) ?? []
-                for group in subscriptionGroups {
-                    if subscriptionsPerGroup[group.id] == nil {
-                        subscriptionsPerGroup[group.id] = try? await service.fetchSubscriptionsInGroup(groupId: group.id)
-                    }
-                }
-            }
+            await refreshSubmissionReadinessData()
 
         case .storeListing:
             let versions = try await service.fetchAppStoreVersions(appId: appId)
@@ -710,20 +1110,20 @@ final class ASCManager {
                 ageRatingDeclaration = try? await service.fetchAgeRating(appInfoId: infoId)
             }
             builds = try await service.fetchBuilds(appId: appId)
-            // Fetch review submission history (for rejection details)
-            reviewSubmissions = (try? await service.fetchReviewSubmissions(appId: appId)) ?? []
-            if let latest = reviewSubmissions.first {
-                latestSubmissionItems = (try? await service.fetchReviewSubmissionItems(submissionId: latest.id)) ?? []
-            }
+            await refreshReviewSubmissionData(appId: appId, service: service)
+            rebuildSubmissionHistory(appId: appId)
 
         case .monetization:
             appPricePoints = try await service.fetchAppPricePoints(appId: appId)
+            let pricingState = (try? await service.fetchAppPricingState(appId: appId))
+                ?? ASCAppPricingState(currentPricePointId: nil, scheduledPricePointId: nil, scheduledEffectiveDate: nil)
+            applyAppPricingState(pricingState)
             inAppPurchases = try await service.fetchInAppPurchases(appId: appId)
             subscriptionGroups = try await service.fetchSubscriptionGroups(appId: appId)
             for group in subscriptionGroups {
                 subscriptionsPerGroup[group.id] = try await service.fetchSubscriptionsInGroup(groupId: group.id)
             }
-            if monetizationStatus == nil {
+            if currentAppPricePointId == nil && scheduledAppPricePointId == nil && monetizationStatus == nil {
                 let hasPricing = await service.fetchPricingConfigured(appId: appId)
                 monetizationStatus = hasPricing ? "Configured" : nil
             }
@@ -868,7 +1268,10 @@ final class ASCManager {
         do {
             try await service.setAppPrice(appId: appId, pricePointId: pricePointId)
             try await service.ensureAppAvailability(appId: appId)
-            monetizationStatus = "Configured"
+            currentAppPricePointId = pricePointId
+            scheduledAppPricePointId = nil
+            scheduledAppPriceEffectiveDate = nil
+            monetizationStatus = isFreePricePoint(pricePointId) ? "Free" : "Configured"
         } catch {
             writeError = error.localizedDescription
         }
@@ -885,6 +1288,9 @@ final class ASCManager {
                 futurePricePointId: futurePricePointId,
                 effectiveDate: effectiveDate
             )
+            self.currentAppPricePointId = currentPricePointId
+            scheduledAppPricePointId = futurePricePointId
+            scheduledAppPriceEffectiveDate = effectiveDate
             monetizationStatus = "Configured"
         } catch {
             writeError = error.localizedDescription
@@ -1243,6 +1649,88 @@ final class ASCManager {
         }
     }
 
+    func refreshAttachedSubmissionItemIDs() async {
+        guard let appId = app?.id else {
+            attachedSubmissionItemIDs = []
+            return
+        }
+        guard let cookieHeader = ascWebSessionCookieHeader() else {
+            attachedSubmissionItemIDs = []
+            return
+        }
+
+        let subscriptionURL = "https://appstoreconnect.apple.com/iris/v1/apps/\(appId)/subscriptionGroups?include=subscriptions&limit=300&fields%5Bsubscriptions%5D=productId,name,state,submitWithNextAppStoreVersion"
+        let iapURL = "https://appstoreconnect.apple.com/iris/v1/apps/\(appId)/inAppPurchasesV2?limit=300&fields%5BinAppPurchases%5D=productId,name,state,submitWithNextAppStoreVersion"
+
+        let attachedSubscriptions = await fetchAttachedSubmissionItemIDs(urlString: subscriptionURL, cookieHeader: cookieHeader)
+        let attachedIAPs = await fetchAttachedSubmissionItemIDs(urlString: iapURL, cookieHeader: cookieHeader)
+        attachedSubmissionItemIDs = attachedSubscriptions.union(attachedIAPs)
+    }
+
+    private func fetchAttachedSubmissionItemIDs(urlString: String, cookieHeader: String) async -> Set<String> {
+        guard let url = URL(string: urlString) else { return [] }
+
+        var request = URLRequest(url: url)
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("XMLHttpRequest", forHTTPHeaderField: "X-Requested-With")
+        request.setValue("https://appstoreconnect.apple.com", forHTTPHeaderField: "Origin")
+        request.setValue("https://appstoreconnect.apple.com/", forHTTPHeaderField: "Referer")
+        request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+        request.timeoutInterval = 10
+
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return []
+        }
+
+        let resources = (json["data"] as? [[String: Any]] ?? [])
+            + (json["included"] as? [[String: Any]] ?? [])
+
+        return Set(resources.compactMap { item in
+            guard let attrs = item["attributes"] as? [String: Any],
+                  let id = item["id"] as? String,
+                  let submitWithNext = attrs["submitWithNextAppStoreVersion"] as? Bool,
+                  submitWithNext else { return nil }
+            return id
+        })
+    }
+
+    private func ascWebSessionCookieHeader() -> String? {
+        guard let storeData = readKeychainItem(service: "asc-web-session", account: "asc:web-session:store"),
+              let store = try? JSONSerialization.jsonObject(with: storeData) as? [String: Any],
+              let lastKey = store["last_key"] as? String,
+              let sessions = store["sessions"] as? [String: Any],
+              let sessionDict = sessions[lastKey] as? [String: Any],
+              let cookies = sessionDict["cookies"] as? [String: [[String: Any]]] else {
+            return nil
+        }
+
+        let cookieHeader = cookies.values.flatMap { $0 }.compactMap { cookie -> String? in
+            guard let name = cookie["name"] as? String,
+                  let value = cookie["value"] as? String,
+                  !name.isEmpty else { return nil }
+            return name.hasPrefix("DES") ? "\(name)=\"\(value)\"" : "\(name)=\(value)"
+        }.joined(separator: "; ")
+
+        return cookieHeader.isEmpty ? nil : cookieHeader
+    }
+
+    private func readKeychainItem(service: String, account: String) -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess else { return nil }
+        return result as? Data
+    }
+
     func setPriceFree() async {
         guard let service else { return }
         guard let appId = app?.id else { return }
@@ -1250,10 +1738,43 @@ final class ASCManager {
         do {
             try await service.setPriceFree(appId: appId)
             try await service.ensureAppAvailability(appId: appId)
+            currentAppPricePointId = freeAppPricePointId
+            scheduledAppPricePointId = nil
+            scheduledAppPriceEffectiveDate = nil
             monetizationStatus = "Free"
         } catch {
             writeError = error.localizedDescription
         }
+    }
+
+    var freeAppPricePointId: String? {
+        appPricePoints.first(where: {
+            let price = $0.attributes.customerPrice ?? "0"
+            return price == "0" || price == "0.0" || price == "0.00"
+        })?.id
+    }
+
+    func applyAppPricingState(_ state: ASCAppPricingState) {
+        currentAppPricePointId = state.currentPricePointId
+        scheduledAppPricePointId = state.scheduledPricePointId
+        scheduledAppPriceEffectiveDate = state.scheduledEffectiveDate
+
+        if let currentPricePointId = currentAppPricePointId {
+            let isCurrentlyFree = isFreePricePoint(currentPricePointId)
+            monetizationStatus = (isCurrentlyFree && state.scheduledPricePointId == nil) ? "Free" : "Configured"
+        } else if state.scheduledPricePointId != nil {
+            monetizationStatus = "Configured"
+        } else {
+            monetizationStatus = nil
+        }
+    }
+
+    func isFreePricePoint(_ pricePointId: String) -> Bool {
+        appPricePoints.contains(where: {
+            guard $0.id == pricePointId else { return false }
+            let price = $0.attributes.customerPrice ?? "0"
+            return price == "0" || price == "0.0" || price == "0.00"
+        })
     }
 
     // MARK: - Screenshot Track
@@ -1411,8 +1932,9 @@ final class ASCManager {
     static func validateDimensions(width: Int, height: Int, displayType: String) -> String? {
         switch displayType {
         case "APP_IPHONE_67":
-            if width == 1290 && height == 2796 { return nil }
-            return "\(width)\u{00d7}\(height) — need 1290\u{00d7}2796 for iPhone"
+            let validSizes: Set<String> = ["1290x2796", "1284x2778", "1242x2688", "1260x2736"]
+            if validSizes.contains("\(width)x\(height)") { return nil }
+            return "\(width)\u{00d7}\(height) — need 1290\u{00d7}2796, 1284\u{00d7}2778, 1242\u{00d7}2688, or 1260\u{00d7}2736 for iPhone"
         case "APP_IPAD_PRO_3GEN_129":
             if width == 2048 && height == 2732 { return nil }
             return "\(width)\u{00d7}\(height) — need 2048\u{00d7}2732 for iPad"
@@ -1512,7 +2034,7 @@ final class ASCManager {
 
     func submitForReview(attachBuildId: String? = nil) async {
         guard let service else { return }
-        guard let appId = app?.id, let versionId = appStoreVersions.first?.id else { return }
+        guard let appId = app?.id, let versionId = pendingVersionId else { return }
         isSubmitting = true
         submissionError = nil
         do {
@@ -1522,8 +2044,7 @@ final class ASCManager {
             }
             try await service.submitForReview(appId: appId, versionId: versionId)
             isSubmitting = false
-            // Refresh versions to show new state
-            appStoreVersions = try await service.fetchAppStoreVersions(appId: appId)
+            await refreshTabData(.ascOverview)
         } catch {
             isSubmitting = false
             submissionError = error.localizedDescription

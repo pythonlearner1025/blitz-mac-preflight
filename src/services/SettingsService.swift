@@ -5,6 +5,11 @@ import os
 @MainActor
 @Observable
 final class SettingsService {
+    struct ResolvedTerminalSelection {
+        let terminal: TerminalApp
+        let replacedMissingTerminal: TerminalApp?
+    }
+
     /// Shared singleton for permission checks from non-UI code (e.g. ApprovalRequest)
     static let shared = SettingsService()
     private static let logger = Logger(subsystem: "com.blitz.macos", category: "Settings")
@@ -77,5 +82,20 @@ final class SettingsService {
         } catch {
             Self.logger.error("Failed to save settings: \(error.localizedDescription)")
         }
+    }
+
+    /// Resets stale terminal choices when the selected app is no longer installed.
+    @discardableResult
+    func resolveDefaultTerminal() -> ResolvedTerminalSelection {
+        let configured = TerminalApp.from(defaultTerminal)
+        let resolved = configured.resolvedFallback
+
+        guard resolved != configured else {
+            return ResolvedTerminalSelection(terminal: resolved, replacedMissingTerminal: nil)
+        }
+
+        defaultTerminal = resolved.settingsValue
+        save()
+        return ResolvedTerminalSelection(terminal: resolved, replacedMissingTerminal: configured)
     }
 }

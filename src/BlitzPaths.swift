@@ -12,6 +12,9 @@ enum BlitzPaths {
     /// Projects directory: ~/.blitz/projects/
     static var projects: URL { root.appendingPathComponent("projects") }
 
+    /// Global MCP configs directory: ~/.blitz/mcps/
+    static var mcps: URL { root.appendingPathComponent("mcps") }
+
     /// Settings file: ~/.blitz/settings.json
     static var settings: URL { root.appendingPathComponent("settings.json") }
 

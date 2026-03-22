@@ -1,8 +1,10 @@
 # Changelog
 
 ## 1.0.27
-- Add Codex and OpenCode as AI agent options in Connect AI selector
-- Fix update flow: show "up to date" feedback, closable update popup, and reliable app quit after install
+- Codex support, fewer manual steps, faster shipping
+- Set a default terminal + agent
+- Fix missing steps with agents
+- Automate ASC API key creation
 
 ## 1.0.26
 - ASC CLI skills: auto-provision 21 App Store Connect skills into each project's .claude/skills/

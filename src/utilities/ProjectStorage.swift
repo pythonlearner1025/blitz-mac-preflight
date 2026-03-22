@@ -4,6 +4,11 @@ import Foundation
 struct ProjectStorage {
     let baseDirectory: URL
 
+    private enum ProjectSkillRoot: String, CaseIterable {
+        case claude = ".claude"
+        case agents = ".agents"
+    }
+
     init() {
         self.baseDirectory = BlitzPaths.projects
     }
@@ -136,12 +141,84 @@ struct ProjectStorage {
         }
     }
 
+    /// Ensure ~/.blitz/mcps/ has MCP configs, CLAUDE.md, and skills so that
+    /// agent sessions launched outside a project (e.g. onboarding ASC setup) can
+    /// access Blitz MCP tools. Idempotent — safe to call on every launch.
+    func ensureGlobalMCPConfigs() {
+        let fm = FileManager.default
+        let mcpsDir = BlitzPaths.mcps
+
+        try? fm.createDirectory(at: mcpsDir, withIntermediateDirectories: true)
+
+        // 1. .mcp.json + .codex/config.toml (reuse project-level logic)
+        ensureMCPConfig(in: mcpsDir)
+
+        // 2. .claude/settings.local.json
+        let claudeDir = mcpsDir.appendingPathComponent(".claude")
+        let settingsFile = claudeDir.appendingPathComponent("settings.local.json")
+        try? fm.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let settings: [String: Any] = [
+            "enabledMcpjsonServers": ["blitz-macos", "blitz-iphone"],
+            "permissions": [
+                "allow": [
+                    "mcp__blitz-macos__asc_set_credentials",
+                    "mcp__blitz-macos__asc_web_auth",
+                    "Bash(python3:*)",
+                ]
+            ]
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: settingsFile)
+        }
+
+        // 3. CLAUDE.md
+        let claudeMd = mcpsDir.appendingPathComponent("CLAUDE.md")
+        let claudeMdContent = """
+        # Blitz — Global Agent Context
+
+        This directory is used by Blitz to run agent sessions outside of a project context
+        (e.g. App Store Connect API key setup during onboarding).
+
+        ## Available MCP Tools
+
+        The `blitz-macos` MCP server is connected. Key tools for ASC setup:
+
+        - `asc_web_auth` — Opens the Apple ID login window in Blitz to authenticate a web session.
+          Call this first if you get a 401 from iris APIs or if no web session exists.
+        - `asc_set_credentials` — Pre-fills the ASC credential form in Blitz with issuer ID, key ID,
+          and a path to the .p8 private key file. The user must click "Save Credentials" to confirm.
+          Parameters: `issuerId` (string), `keyId` (string), `privateKeyPath` (string, absolute path to .p8 file).
+        """
+        try? claudeMdContent.write(to: claudeMd, atomically: true, encoding: .utf8)
+
+        // 4. Skills — copy bundled skills (e.g. asc-team-key-create)
+        let skillDirectories = ProjectSkillRoot.allCases.map {
+            mcpsDir.appendingPathComponent($0.rawValue).appendingPathComponent("skills")
+        }
+
+        DispatchQueue.global(qos: .utility).async {
+            for skillsDir in skillDirectories {
+                try? fm.createDirectory(at: skillsDir, withIntermediateDirectories: true)
+            }
+
+            if let bundledSkillsDir = Self.bundledProjectSkillsDirectory() {
+                Self.syncSkillDirectories(from: bundledSkillsDir, into: skillDirectories, using: fm)
+            }
+        }
+    }
+
     /// Ensure .mcp.json contains blitz-macos and blitz-iphone MCP server entries.
     /// If the file exists, merges into the existing mcpServers key without overwriting other entries.
     /// If it doesn't exist, creates it.
+    /// Also removes the deprecated blitz-ios entry if present.
     func ensureMCPConfig(projectId: String) {
         let projectDir = baseDirectory.appendingPathComponent(projectId)
-        let mcpFile = projectDir.appendingPathComponent(".mcp.json")
+        ensureMCPConfig(in: projectDir)
+    }
+
+    /// Shared implementation: writes .mcp.json and .codex/config.toml into `directory`.
+    func ensureMCPConfig(in directory: URL) {
+        let mcpFile = directory.appendingPathComponent(".mcp.json")
         let bridgePath = BlitzPaths.mcpBridge.path
 
         let blitzMacosEntry: [String: Any] = [
@@ -167,6 +244,7 @@ struct ProjectStorage {
             var servers = root["mcpServers"] as? [String: Any] ?? [:]
             servers["blitz-macos"] = blitzMacosEntry
             servers["blitz-iphone"] = blitzIphoneEntry
+            servers.removeValue(forKey: "blitz-ios") // deprecated
             root["mcpServers"] = servers
         } else {
             root = ["mcpServers": [
@@ -180,6 +258,23 @@ struct ProjectStorage {
             try data.write(to: mcpFile)
         } catch {
             print("[ProjectStorage] Failed to write .mcp.json: \(error)")
+        }
+
+        // Codex config — only blitz_macos (Codex reads .mcp.json for blitz-iphone).
+        // Uses underscores to avoid Codex hyphenated-name bug.
+        let codexDir = directory.appendingPathComponent(".codex")
+        let codexConfig = codexDir.appendingPathComponent("config.toml")
+        let toml = """
+        [mcp_servers.blitz_macos]
+        command = "bash"
+        args = ["\(bridgePath)"]
+        cwd = "\(directory.path)"
+        """
+        do {
+            try FileManager.default.createDirectory(at: codexDir, withIntermediateDirectories: true)
+            try toml.write(to: codexConfig, atomically: true, encoding: .utf8)
+        } catch {
+            print("[ProjectStorage] Failed to write .codex/config.toml: \(error)")
         }
     }
 
@@ -200,6 +295,13 @@ struct ProjectStorage {
            var existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             // Preserve user customisations; only force-update the server list
             existing["enabledMcpjsonServers"] = correctServers
+            // Remove deprecated blitz-ios permission entries
+            if var perms = existing["permissions"] as? [String: Any],
+               var allow = perms["allow"] as? [String] {
+                allow.removeAll { $0.contains("blitz-ios") }
+                perms["allow"] = allow
+                existing["permissions"] = perms
+            }
             settings = existing
         } else {
             settings = [
@@ -241,8 +343,9 @@ struct ProjectStorage {
         // 4. App Store Review Agent — clone from public repo, symlink into .claude/agents/
         ensureReviewerAgent(projectDir: projectDir)
 
-        // 5. ASC CLI skills — clone from public repo, copy into .claude/skills/
-        ensureASCSkills(projectDir: projectDir)
+        // 5. Project skills — copy bundled Blitz skills and sync ASC CLI skills
+        // into supported local agent skill directories.
+        ensureProjectSkills(projectDir: projectDir)
 
         // 6. ASC CLI — headless install if not already present
         ensureASCCLI()
@@ -302,17 +405,29 @@ struct ProjectStorage {
         }
     }
 
-    /// Clone or update the ASC CLI skills repo and copy skill directories
-    /// into .claude/skills/ where Claude Code can discover them.
+    /// Copy bundled Blitz project skills and sync the ASC CLI skills repo into
+    /// each supported local agent skills directory.
     /// Overwrites asc-app-create-ui/SKILL.md with the pre-cached-session version.
     /// Runs git operations on a background queue so it never blocks the UI.
-    func ensureASCSkills(projectDir: URL) {
+    func ensureProjectSkills(projectDir: URL) {
         let fm = FileManager.default
         let claudeDir = projectDir.appendingPathComponent(".claude")
         let repoDir = claudeDir.appendingPathComponent("asc-skills")
-        let skillsDir = claudeDir.appendingPathComponent("skills")
+        let skillDirectories = projectSkillDirectories(projectDir: projectDir)
 
         DispatchQueue.global(qos: .utility).async {
+            for skillsDir in skillDirectories {
+                try? fm.createDirectory(at: skillsDir, withIntermediateDirectories: true)
+            }
+
+            if let bundledSkillsDir = Self.bundledProjectSkillsDirectory() {
+                Self.syncSkillDirectories(
+                    from: bundledSkillsDir,
+                    into: skillDirectories,
+                    using: fm
+                )
+            }
+
             let repoURL = BlitzPaths.ascSkillsRepo
 
             if fm.fileExists(atPath: repoDir.appendingPathComponent(".git").path) {
@@ -339,77 +454,253 @@ struct ProjectStorage {
                 }
             }
 
-            // Copy each skill directory from the cloned repo into .claude/skills/
             let repoSkillsDir = repoDir.appendingPathComponent("skills")
-            guard let skillDirs = try? fm.contentsOfDirectory(
-                at: repoSkillsDir,
-                includingPropertiesForKeys: [.isDirectoryKey]
-            ) else { return }
+            Self.syncSkillDirectories(from: repoSkillsDir, into: skillDirectories, using: fm)
 
-            try? fm.createDirectory(at: skillsDir, withIntermediateDirectories: true)
+            // Overwrite asc-app-create-ui/SKILL.md with Blitz's pre-cached-session version
+            for skillsDir in skillDirectories {
+                let ascCreateSkillFile = skillsDir
+                    .appendingPathComponent("asc-app-create-ui")
+                    .appendingPathComponent("SKILL.md")
+                try? Self.ascAppCreateSkillContent()
+                    .write(to: ascCreateSkillFile, atomically: true, encoding: .utf8)
+            }
 
+            let installedRoots = skillDirectories
+                .map(\.path)
+                .joined(separator: ", ")
+            print("[ProjectStorage] Project skills installed in \(installedRoots)")
+        }
+    }
+
+    private func projectSkillDirectories(projectDir: URL) -> [URL] {
+        ProjectSkillRoot.allCases.map {
+            projectDir
+                .appendingPathComponent($0.rawValue)
+                .appendingPathComponent("skills")
+        }
+    }
+
+    private static func bundledProjectSkillsDirectory() -> URL? {
+        let fm = FileManager.default
+
+        if let bundleSkills = Bundle.main.resourceURL?
+            .appendingPathComponent("claude-skills"),
+           fm.fileExists(atPath: bundleSkills.path) {
+            return bundleSkills
+        }
+
+        #if DEBUG
+        let repoSkills = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent(".claude/skills")
+        if fm.fileExists(atPath: repoSkills.path) {
+            return repoSkills
+        }
+        #endif
+
+        return nil
+    }
+
+    private static func syncSkillDirectories(from sourceSkillsDir: URL, into destinations: [URL], using fm: FileManager) {
+        guard let skillDirs = try? fm.contentsOfDirectory(
+            at: sourceSkillsDir,
+            includingPropertiesForKeys: [.isDirectoryKey]
+        ) else { return }
+
+        for destination in destinations {
             for srcSkillDir in skillDirs {
                 var isDir: ObjCBool = false
                 guard fm.fileExists(atPath: srcSkillDir.path, isDirectory: &isDir),
                       isDir.boolValue else { continue }
 
-                let destSkillDir = skillsDir.appendingPathComponent(srcSkillDir.lastPathComponent)
-
+                let destSkillDir = destination.appendingPathComponent(srcSkillDir.lastPathComponent)
                 if fm.fileExists(atPath: destSkillDir.path) {
-                    // Update: remove and re-copy to pick up changes
                     try? fm.removeItem(at: destSkillDir)
                 }
                 try? fm.copyItem(at: srcSkillDir, to: destSkillDir)
             }
-
-            // Overwrite asc-app-create-ui/SKILL.md with Blitz's pre-cached-session version
-            let ascCreateSkillFile = skillsDir
-                .appendingPathComponent("asc-app-create-ui")
-                .appendingPathComponent("SKILL.md")
-            try? Self.ascAppCreateSkillContent()
-                .write(to: ascCreateSkillFile, atomically: true, encoding: .utf8)
-
-            print("[ProjectStorage] ASC skills installed")
         }
     }
 
     /// Content for the Blitz-specific asc-app-create-ui skill that uses
-    /// pre-cached Apple ID session instead of requiring browser automation.
+    /// iris APIs via the web session cached in Keychain.
     private static func ascAppCreateSkillContent() -> String {
-        return """
+        return ##"""
         ---
         name: asc-app-create-ui
-        description: Create an App Store Connect app using pre-cached Apple ID session from Blitz
+        description: Create an App Store Connect app via iris API using web session from Blitz
         ---
 
-        Create an App Store Connect app using the `asc` CLI. The user's Apple ID session has already been captured by Blitz and bridged into the ASC CLI keychain, so **no password or 2FA is needed**.
+        Create an App Store Connect app using Apple's iris API. Authentication is handled via a web session stored in the macOS Keychain by Blitz.
 
         Extract from the conversation context:
         - `bundleId` — the bundle identifier (e.g. `com.blitz.myapp`)
-        - `sku` — the SKU string
-        - `appleId` — the Apple ID email (may be provided; if missing, ask the user)
+        - `sku` — the SKU string (may be provided; if missing, generate one from the app name)
 
-        ## Steps
+        ## Workflow
 
-        1. **Ask the user** what primary language the app should use. Common choices: `en-US` (English US), `en-GB` (English UK), `ja` (Japanese), `zh-Hans` (Simplified Chinese), `ko` (Korean), `fr-FR` (French), `de-DE` (German).
-
-        2. **Derive the app name** from the bundle ID: take the last component after the final `.`, capitalize the first letter.
-
-        3. **Run the create command** — auth is pre-cached, no prompts expected:
+        ### 1. Check for an existing web session
 
         ```bash
-        asc apps create \\
-          --apple-id "<appleId>" \\
-          --bundle-id "<bundleId>" \\
-          --sku "<sku>" \\
-          --primary-locale "<locale>" \\
-          --name "<appName>"
+        security find-generic-password -s "asc-web-session" -a "asc:web-session:store" -w > /dev/null 2>&1 && echo "SESSION_EXISTS" || echo "NO_SESSION"
         ```
 
-        4. Report the App ID and store URL back to the user on success.
+        - If `NO_SESSION`: call the `asc_web_auth` MCP tool first. Wait for it to complete before proceeding.
+        - If `SESSION_EXISTS`: proceed.
 
-        5. If the command fails with an auth error, tell the user to re-authenticate through Blitz (Release > Overview > "Automatically create using Claude Code") and try again.
-        """
+        ### 2. Ask the user for the primary language
+
+        Ask what primary language/locale the app should use. Common choices: `en-US` (English US), `en-GB` (English UK), `ja` (Japanese), `zh-Hans` (Simplified Chinese), `ko` (Korean), `fr-FR` (French), `de-DE` (German).
+
+        ### 3. Derive the app name
+
+        Take the last component of the bundle ID after the final `.`, capitalize the first letter. Confirm with the user.
+
+        ### 4. Create the app via iris API
+
+        Use the following self-contained script. Replace `BUNDLE_ID`, `SKU`, `APP_NAME`, and `LOCALE` with the resolved values. **Do not print or log cookies.**
+
+        Key differences from the public REST API:
+        - Uses `appstoreconnect.apple.com/iris/v1/` (not `api.appstoreconnect.apple.com`)
+        - Authenticated via web session cookies (not JWT)
+        - Uses `appInfos` relationship (not `bundleId` relationship)
+        - App name goes on `appInfoLocalizations` (not `appStoreVersionLocalizations`)
+        - Uses `${new-...}` placeholder IDs for inline-created resources
+
+        ```bash
+        python3 -c "
+        import json, subprocess, urllib.request, sys
+
+        BUNDLE_ID = 'BUNDLE_ID_HERE'
+        SKU = 'SKU_HERE'
+        APP_NAME = 'APP_NAME_HERE'
+        LOCALE = 'LOCALE_HERE'
+
+        # Extract cookies from keychain (silent)
+        try:
+            raw = subprocess.check_output([
+                'security', 'find-generic-password',
+                '-s', 'asc-web-session',
+                '-a', 'asc:web-session:store',
+                '-w'
+            ], stderr=subprocess.DEVNULL).decode()
+        except subprocess.CalledProcessError:
+            print('ERROR: No web session found. Call asc_web_auth MCP tool first.')
+            sys.exit(1)
+
+        store = json.loads(raw)
+        session = store['sessions'][store['last_key']]
+        cookie_str = '; '.join(
+            (f'{c[\"name\"]}=\"{c[\"value\"]}\"' if c['name'].startswith('DES') else f'{c[\"name\"]}={c[\"value\"]}')
+            for cl in session['cookies'].values() for c in cl
+            if c.get('name') and c.get('value')
+        )
+
+        headers = {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+            'Origin': 'https://appstoreconnect.apple.com',
+            'Referer': 'https://appstoreconnect.apple.com/',
+            'Cookie': cookie_str
+        }
+
+        create_body = json.dumps({
+            'data': {
+                'type': 'apps',
+                'attributes': {
+                    'bundleId': BUNDLE_ID,
+                    'sku': SKU,
+                    'primaryLocale': LOCALE,
+                },
+                'relationships': {
+                    'appStoreVersions': {
+                        'data': [{'type': 'appStoreVersions', 'id': '\${new-appStoreVersion-1}'}]
+                    },
+                    'appInfos': {
+                        'data': [{'type': 'appInfos', 'id': '\${new-appInfo-1}'}]
+                    }
+                }
+            },
+            'included': [
+                {
+                    'type': 'appStoreVersions',
+                    'id': '\${new-appStoreVersion-1}',
+                    'attributes': {'platform': 'IOS', 'versionString': '1.0'},
+                    'relationships': {
+                        'appStoreVersionLocalizations': {
+                            'data': [{'type': 'appStoreVersionLocalizations', 'id': '\${new-appStoreVersionLocalization-1}'}]
+                        }
+                    }
+                },
+                {
+                    'type': 'appStoreVersionLocalizations',
+                    'id': '\${new-appStoreVersionLocalization-1}',
+                    'attributes': {'locale': LOCALE}
+                },
+                {
+                    'type': 'appInfos',
+                    'id': '\${new-appInfo-1}',
+                    'relationships': {
+                        'appInfoLocalizations': {
+                            'data': [{'type': 'appInfoLocalizations', 'id': '\${new-appInfoLocalization-1}'}]
+                        }
+                    }
+                },
+                {
+                    'type': 'appInfoLocalizations',
+                    'id': '\${new-appInfoLocalization-1}',
+                    'attributes': {'locale': LOCALE, 'name': APP_NAME}
+                }
+            ]
+        }).encode()
+
+        req = urllib.request.Request(
+            'https://appstoreconnect.apple.com/iris/v1/apps',
+            data=create_body, method='POST', headers=headers)
+        try:
+            resp = urllib.request.urlopen(req)
+            result = json.loads(resp.read().decode())
+            app_id = result['data']['id']
+            print(f'App created successfully!')
+            print(f'App ID: {app_id}')
+            print(f'Bundle ID: {BUNDLE_ID}')
+            print(f'Name: {APP_NAME}')
+            print(f'SKU: {SKU}')
+        except urllib.error.HTTPError as e:
+            body = e.read().decode()
+            if e.code == 401:
+                print('ERROR: Session expired. Call asc_web_auth MCP tool to re-authenticate.')
+            elif e.code == 409:
+                print(f'ERROR: App may already exist or conflict. Details: {body[:500]}')
+            else:
+                print(f'ERROR creating app: HTTP {e.code} — {body[:500]}')
+            sys.exit(1)
+        "
+        ```
+
+        ### 5. Report results
+
+        After success, report the App ID, bundle ID, name, and SKU to the user.
+
+        ## Common Errors
+
+        ### 401 Not Authorized
+        Call the `asc_web_auth` MCP tool to open the Apple ID login window in Blitz. Then retry.
+
+        ### 409 Conflict
+        An app with the same bundle ID or SKU may already exist. Try a different SKU.
+
+        ## Agent Behavior
+
+        - **Do NOT ask for Apple ID email** — authentication is handled via Keychain session, not email.
+        - **NEVER print, log, or echo session cookies.**
+        - Use the self-contained python script — do NOT extract cookies separately.
+        - If iris API returns 401, call `asc_web_auth` MCP tool and retry.
+        """##
     }
 
     /// Install the `asc` CLI if not already present on the system.

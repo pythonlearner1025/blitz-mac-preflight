@@ -14,6 +14,7 @@ final class MCPBootstrap {
         installBridgeScript()
         installClaudeSkills()
         updateIphoneMCP()
+        ProjectStorage().ensureGlobalMCPConfigs()
 
         let server = MCPServerService(appState: appState)
         self.server = server

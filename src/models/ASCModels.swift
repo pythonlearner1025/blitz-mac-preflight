@@ -87,6 +87,80 @@ struct ASCAppStoreVersion: Decodable, Identifiable {
     }
 }
 
+enum ASCSubmissionHistoryEventType: String, Codable {
+    case submitted
+    case inReview
+    case processing
+    case accepted
+    case live
+    case rejected
+    case withdrawn
+    case removed
+}
+
+enum ASCSubmissionHistoryEventSource: String, Codable {
+    case reviewSubmission
+    case transitionLedger
+    case currentVersion
+    case irisFeedback
+}
+
+enum ASCSubmissionHistoryAccuracy: String, Codable {
+    case exact
+    case firstSeen
+    case derived
+}
+
+struct ASCSubmissionHistoryEvent: Codable, Identifiable {
+    let id: String
+    let versionId: String?
+    let versionString: String
+    let eventType: ASCSubmissionHistoryEventType
+    let appleState: String?
+    let occurredAt: String
+    let source: ASCSubmissionHistoryEventSource
+    let accuracy: ASCSubmissionHistoryAccuracy
+    let submissionId: String?
+    let note: String?
+}
+
+struct ASCSubmissionHistoryCache: Codable {
+    let appId: String
+    var versionSnapshots: [String: VersionSnapshot]
+    var transitionEvents: [ASCSubmissionHistoryEvent]
+
+    struct VersionSnapshot: Codable {
+        let versionId: String
+        var versionString: String
+        var lastKnownState: String
+        var lastSeenAt: String
+    }
+
+    func save() throws {
+        let url = Self.cacheURL(appId: appId)
+        let dir = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(self)
+        try data.write(to: url, options: .atomic)
+    }
+
+    static func load(appId: String) -> ASCSubmissionHistoryCache {
+        let url = cacheURL(appId: appId)
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode(ASCSubmissionHistoryCache.self, from: data) else {
+            return ASCSubmissionHistoryCache(appId: appId, versionSnapshots: [:], transitionEvents: [])
+        }
+        return decoded
+    }
+
+    private static func cacheURL(appId: String) -> URL {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return home.appendingPathComponent(".blitz/asc-history/\(appId).json")
+    }
+}
+
 // MARK: - VersionLocalization
 
 struct ASCVersionLocalization: Decodable, Identifiable {
@@ -455,6 +529,40 @@ struct ASCPriceScheduleEntry: Decodable, Identifiable {
     let id: String
 }
 
+struct ASCResourceIdentifier: Decodable {
+    let id: String
+    let type: String?
+}
+
+struct ASCToOneRelationship: Decodable {
+    let data: ASCResourceIdentifier?
+}
+
+struct ASCAppPrice: Decodable, Identifiable {
+    let id: String
+    let attributes: Attributes?
+    let relationships: Relationships?
+
+    struct Attributes: Decodable {
+        let startDate: String?
+        let endDate: String?
+    }
+
+    struct Relationships: Decodable {
+        let appPricePoint: ASCToOneRelationship?
+    }
+
+    var appPricePointId: String? { relationships?.appPricePoint?.data?.id }
+    var startDate: String? { attributes?.startDate }
+    var endDate: String? { attributes?.endDate }
+}
+
+struct ASCAppPricingState {
+    let currentPricePointId: String?
+    let scheduledPricePointId: String?
+    let scheduledEffectiveDate: String?
+}
+
 // MARK: - Territory
 
 struct ASCTerritory: Decodable, Identifiable {
@@ -504,12 +612,12 @@ struct ASCProfile: Decodable, Identifiable {
 
 // MARK: - Iris Session (Apple ID cookie-based auth for internal APIs)
 
-struct IrisSession: Codable {
+struct IrisSession: Codable, Sendable {
     var cookies: [IrisCookie]
     var email: String?
     var capturedAt: Date
 
-    struct IrisCookie: Codable {
+    struct IrisCookie: Codable, Sendable {
         let name: String
         let value: String
         let domain: String
@@ -634,6 +742,24 @@ struct IrisFeedbackCache: Codable {
         let url = cacheURL(appId: appId, versionString: versionString)
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(IrisFeedbackCache.self, from: data)
+    }
+
+    static func loadAll(appId: String) -> [IrisFeedbackCache] {
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".blitz/iris-cache/\(appId)")
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: dir,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        return urls
+            .filter { $0.pathExtension == "json" }
+            .compactMap { url in
+                guard let data = try? Data(contentsOf: url) else { return nil }
+                return try? JSONDecoder().decode(IrisFeedbackCache.self, from: data)
+            }
+            .sorted { $0.fetchedAt > $1.fetchedAt }
     }
 
     private static func cacheURL(appId: String, versionString: String) -> URL {

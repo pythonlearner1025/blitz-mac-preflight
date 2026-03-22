@@ -23,7 +23,7 @@ private func irisLog(_ msg: String) {
 }
 
 struct AppleIDLoginSheet: View {
-    var subtitle: String = "Sign in to App Store Connect to view Apple's review feedback."
+    var subtitle: String = "Sign in to App Store Connect to authenticate your Apple ID session."
     var onSessionCaptured: (IrisSession) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var isLoading = true
@@ -177,47 +177,49 @@ struct ASCWebView: NSViewRepresentable {
             hasCapture = true
             irisLog("extractCookies: starting extraction")
 
-            webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { [weak self] cookies in
-                let appleCookies = cookies.filter { $0.domain.contains("apple.com") }
-                irisLog("extractCookies: total cookies=\(cookies.count), apple.com cookies=\(appleCookies.count)")
+            // Fetch Apple ID email via synchronous XHR inside the WebView FIRST.
+            // This call to /olympus/v1/session also establishes the full ASC session
+            // and may set additional cookies (e.g. itctx, CSRF tokens) that are
+            // required for iris API calls. We capture cookies AFTER this completes.
+            let js = """
+            (function() {
+                try {
+                    var xhr = new XMLHttpRequest();
+                    xhr.open('GET', 'https://appstoreconnect.apple.com/olympus/v1/session', false);
+                    xhr.setRequestHeader('Accept', 'application/json');
+                    xhr.send();
+                    if (xhr.status === 200) {
+                        var j = JSON.parse(xhr.responseText);
+                        return (j.user && j.user.emailAddress) || null;
+                    }
+                    return null;
+                } catch(e) { return null; }
+            })()
+            """
 
-                for c in appleCookies {
-                    irisLog("  cookie: \(c.name) domain=\(c.domain) path=\(c.path) value=\(String(c.value.prefix(20)))…")
-                }
+            DispatchQueue.main.async {
+                webView.evaluateJavaScript(js) { [weak self] result, error in
+                    let email = result as? String
+                    irisLog("extractCookies: fetched email=\(email ?? "nil") error=\(error?.localizedDescription ?? "none")")
 
-                let irisCookies = appleCookies.map { cookie in
-                    IrisSession.IrisCookie(
-                        name: cookie.name,
-                        value: cookie.value,
-                        domain: cookie.domain,
-                        path: cookie.path
-                    )
-                }
+                    // Now capture cookies AFTER the olympus session call,
+                    // so we include any cookies set by that response.
+                    webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+                        let appleCookies = cookies.filter { $0.domain.contains("apple.com") }
+                        irisLog("extractCookies: total cookies=\(cookies.count), apple.com cookies=\(appleCookies.count)")
 
-                // Fetch Apple ID email via synchronous XHR inside the WebView.
-                // We use sync XHR (not fetch) because WKWebView's evaluateJavaScript
-                // does NOT await Promises — fetch().then() returns a Promise object
-                // which serializes as nil. Sync XHR returns the value immediately.
-                let js = """
-                (function() {
-                    try {
-                        var xhr = new XMLHttpRequest();
-                        xhr.open('GET', 'https://appstoreconnect.apple.com/olympus/v1/session', false);
-                        xhr.setRequestHeader('Accept', 'application/json');
-                        xhr.send();
-                        if (xhr.status === 200) {
-                            var j = JSON.parse(xhr.responseText);
-                            return (j.user && j.user.emailAddress) || null;
+                        for c in appleCookies {
+                            irisLog("  cookie: \(c.name) domain=\(c.domain) path=\(c.path) value=\(String(c.value.prefix(20)))…")
                         }
-                        return null;
-                    } catch(e) { return null; }
-                })()
-                """
 
-                DispatchQueue.main.async {
-                    webView.evaluateJavaScript(js) { result, error in
-                        let email = result as? String
-                        irisLog("extractCookies: fetched email=\(email ?? "nil") error=\(error?.localizedDescription ?? "none")")
+                        let irisCookies = appleCookies.map { cookie in
+                            IrisSession.IrisCookie(
+                                name: cookie.name,
+                                value: cookie.value,
+                                domain: cookie.domain,
+                                path: cookie.path
+                            )
+                        }
 
                         let session = IrisSession(
                             cookies: irisCookies,

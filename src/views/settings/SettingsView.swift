@@ -9,6 +9,7 @@ struct SettingsView: View {
     @State private var showTerminalPicker = false
     @State private var showSkipPermsDetail = false
     @State private var showAskAIDetail = false
+    @State private var terminalResetWarning: String?
 
     private let gateableCategories: [(ApprovalRequest.ToolCategory, String)] = [
         (.ascFormMutation, "ASC form editing"),
@@ -20,8 +21,12 @@ struct SettingsView: View {
         (.simulatorControl, "Simulator control"),
     ]
 
-    private var currentTerminal: TerminalApp {
+    private var configuredTerminal: TerminalApp {
         TerminalApp.from(settings.defaultTerminal)
+    }
+
+    private var currentTerminal: TerminalApp {
+        configuredTerminal.resolvedFallback
     }
 
     private var currentAgent: AIAgent {
@@ -134,11 +139,15 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(maxWidth: 500)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task {
+            refreshTerminalResetWarning()
+        }
         .fileImporter(
             isPresented: $showTerminalPicker,
             allowedContentTypes: [.application]
         ) { result in
             if case .success(let url) = result {
+                terminalResetWarning = nil
                 settings.defaultTerminal = TerminalApp.custom(url.path).settingsValue
                 settings.save()
             }
@@ -179,6 +188,16 @@ struct SettingsView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
+            }
+
+            if let terminalResetWarning {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(terminalResetWarning)
+                        .foregroundStyle(.secondary)
+                }
+                .font(.caption)
             }
 
             // Agent CLI picker
@@ -274,6 +293,7 @@ struct SettingsView: View {
 
     private func terminalMenuItem(_ terminal: TerminalApp) -> some View {
         Button {
+            terminalResetWarning = nil
             settings.defaultTerminal = terminal.settingsValue
             settings.save()
         } label: {
@@ -310,5 +330,12 @@ struct SettingsView: View {
         resized.unlockFocus()
         resized.isTemplate = false
         return resized
+    }
+
+    private func refreshTerminalResetWarning() {
+        let resolution = settings.resolveDefaultTerminal()
+        if let missing = resolution.replacedMissingTerminal {
+            terminalResetWarning = "\(missing.displayName) is no longer installed. Reset to Terminal."
+        }
     }
 }

@@ -52,6 +52,7 @@ yarn-error.log
 .idea/
 *.swp
 *~
+.claude/settings.local.json
 compose.dev.yaml
 .aibox
 .idea/workspace.xml
