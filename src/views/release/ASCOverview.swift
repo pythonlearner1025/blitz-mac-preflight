@@ -213,6 +213,18 @@ struct ASCOverview: View {
                                         }
                                     }
                                 } else if let url = field.actionUrl, let nsUrl = URL(string: url) {
+                                    if field.hint != nil {
+                                        Button {
+                                            launchClaudeCodeForIAPAttach()
+                                        } label: {
+                                            HStack(spacing: 3) {
+                                                Image(systemName: "sparkles")
+                                                Text("Fix")
+                                            }
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                    }
                                     Button("Open in Web") {
                                         NSWorkspace.shared.open(nsUrl)
                                     }
@@ -254,6 +266,29 @@ struct ASCOverview: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
         }
+    }
+
+    private func launchClaudeCodeForIAPAttach() {
+        guard let appId = asc.app?.id else { return }
+
+        let readyIAPs = asc.inAppPurchases.filter { $0.attributes.state == "READY_TO_SUBMIT" }
+        let readySubs = asc.subscriptionsPerGroup.values.flatMap { $0 }
+            .filter { $0.attributes.state == "READY_TO_SUBMIT" }
+        let names = (readyIAPs.map { $0.attributes.name ?? $0.id }
+            + readySubs.map { $0.attributes.name ?? $0.id })
+            .joined(separator: ", ")
+
+        let prompt = "Attach these IAPs/subscriptions to app \(appId) for review: \(names). Use the /asc-iap-attach skill."
+
+        var projectPath: String? = nil
+        if let projectId = asc.loadedProjectId {
+            projectPath = ProjectStorage().baseDirectory.appendingPathComponent(projectId).path
+        }
+
+        let settings = SettingsService.shared
+        let agent = AIAgent(rawValue: settings.defaultAgentCLI) ?? .claudeCode
+        let terminal = TerminalApp.from(settings.defaultTerminal)
+        TerminalLauncher.launch(projectPath: projectPath, agent: agent, terminal: terminal, prompt: prompt)
     }
 
     private var buildProgress: Double {

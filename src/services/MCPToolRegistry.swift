@@ -275,6 +275,13 @@ enum MCPToolRegistry {
         ))
 
         tools.append(tool(
+            name: "asc_web_auth",
+            description: "Open the Apple ID login window in Blitz to authenticate a web session for App Store Connect. Use when the iris API returns 401 (session expired). The login captures cookies and saves them to the macOS Keychain for the asc-iap-attach skill. Requires user interaction (Apple ID + 2FA).",
+            properties: [:],
+            required: []
+        ))
+
+        tools.append(tool(
             name: "asc_set_app_price",
             description: "Set the app's price on the App Store. Use \"0\" for free. Optionally schedule a future price change with effectiveDate.",
             properties: [
@@ -347,7 +354,7 @@ enum MCPToolRegistry {
             return .ascScreenshotMutation
         case "asc_open_submit_preview":
             return .ascSubmitMutation
-        case "asc_create_iap", "asc_create_subscription", "asc_set_app_price":
+        case "asc_create_iap", "asc_create_subscription", "asc_set_app_price", "asc_web_auth":
             return .ascFormMutation
 
         // Build pipeline tools

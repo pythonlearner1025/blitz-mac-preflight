@@ -89,6 +89,8 @@ final class ASCManager {
     var isLoadingIrisFeedback = false
     var irisFeedbackError: String?
     var showAppleIDLogin = false
+    var webAuthMCPCallback: ((IrisSession) -> Void)?
+    var attachedIAPIds: Set<String> = []  // IAP/subscription IDs attached via iris API
     var resolutionCenterThreads: [IrisResolutionCenterThread] = []
     var rejectionMessages: [IrisResolutionCenterMessage] = []
     var rejectionReasons: [IrisReviewRejection] = []
@@ -190,6 +192,40 @@ final class ASCManager {
             .init(label: "Privacy Nutrition Labels", value: nil, required: false, actionUrl: privacyUrl),
             .init(label: "Build", value: builds.first?.attributes.version),
         ])
+
+        // Conditional: first-time IAP/subscription attachment
+        // Only shown when (a) IAPs or subscriptions exist in READY_TO_SUBMIT state
+        // AND (b) no version has ever been approved (first-time submission)
+        let approvedStates: Set<String> = ["READY_FOR_SALE", "REMOVED_FROM_SALE",
+            "DEVELOPER_REMOVED_FROM_SALE", "REPLACED_WITH_NEW_VERSION", "PROCESSING_FOR_APP_STORE"]
+        let hasApprovedVersion = appStoreVersions.contains {
+            approvedStates.contains($0.attributes.appStoreState ?? "")
+        }
+        let isFirstVersion = !hasApprovedVersion
+        if isFirstVersion {
+            let readyIAPs = inAppPurchases.filter { $0.attributes.state == "READY_TO_SUBMIT" && !attachedIAPIds.contains($0.id) }
+            let readySubs = subscriptionsPerGroup.values.flatMap { $0 }
+                .filter { $0.attributes.state == "READY_TO_SUBMIT" && !attachedIAPIds.contains($0.id) }
+            let readyCount = readyIAPs.count + readySubs.count
+            if readyCount > 0 {
+                let names = (readyIAPs.map { $0.attributes.name ?? $0.attributes.productId ?? $0.id }
+                    + readySubs.map { $0.attributes.name ?? $0.attributes.productId ?? $0.id })
+                    .joined(separator: ", ")
+                let iapUrl: String? = app.map {
+                    "https://appstoreconnect.apple.com/apps/\($0.id)/distribution/ios/version/inflight"
+                }
+                fields.append(.init(
+                    label: "In-App Purchases & Subscriptions",
+                    value: nil,
+                    required: true,
+                    actionUrl: iapUrl,
+                    hint: "\(readyCount) item(s) in Ready to Submit state (\(names)) must be attached to this version before submission. "
+                        + "Use the asc-iap-attach skill to attach them via the iris API (asc web session). "
+                        + "The public API does not support first-time IAP/subscription attachment — "
+                        + "run: asc web auth login, then POST to /iris/v1/subscriptionSubmissions with submitWithNextAppStoreVersion:true for each item."
+                ))
+            }
+        }
 
         return SubmissionReadiness(fields: fields)
     }
@@ -346,6 +382,11 @@ final class ASCManager {
         irisLog("ASCManager.loadIrisSession: session valid, irisService created")
     }
 
+    func showWebAuthForMCP(completion: @escaping (IrisSession) -> Void) {
+        webAuthMCPCallback = completion
+        showAppleIDLogin = true
+    }
+
     func setIrisSession(_ session: IrisSession) {
         irisLog("ASCManager.setIrisSession: \(session.cookies.count) cookies")
         do {
@@ -360,6 +401,12 @@ final class ASCManager {
         irisService = IrisService(session: session)
         irisSessionState = .valid
         irisLog("ASCManager.setIrisSession: state set to .valid")
+
+        // Notify MCP tool if it triggered this login
+        if let callback = webAuthMCPCallback {
+            webAuthMCPCallback = nil
+            callback(session)
+        }
     }
 
     func clearIrisSession() {
@@ -592,6 +639,20 @@ final class ASCManager {
             if monetizationStatus == nil {
                 let hasPricing = await service.fetchPricingConfigured(appId: appId)
                 monetizationStatus = hasPricing ? "Configured" : nil
+            }
+
+            // Fetch IAP/subscription data for submission readiness check
+            // (needed to detect first-time IAPs/subs that must be attached to the version)
+            if inAppPurchases.isEmpty {
+                inAppPurchases = (try? await service.fetchInAppPurchases(appId: appId)) ?? []
+            }
+            if subscriptionGroups.isEmpty {
+                subscriptionGroups = (try? await service.fetchSubscriptionGroups(appId: appId)) ?? []
+                for group in subscriptionGroups {
+                    if subscriptionsPerGroup[group.id] == nil {
+                        subscriptionsPerGroup[group.id] = try? await service.fetchSubscriptionsInGroup(groupId: group.id)
+                    }
+                }
             }
 
         case .storeListing:
