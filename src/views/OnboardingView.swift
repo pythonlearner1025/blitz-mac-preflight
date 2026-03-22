@@ -69,7 +69,13 @@ struct OnboardingView: View {
     @State private var selectedAgent: AIAgent = .claudeCode
     @State private var detectedTerminals: [TerminalApp] = []
     @State private var showCustomPicker = false
-    @State private var skipAgentPermissions = false
+    @State private var skipAgentPermissions: Bool
+
+    init(appState: AppState, onComplete: @escaping () -> Void) {
+        self.appState = appState
+        self.onComplete = onComplete
+        _skipAgentPermissions = State(initialValue: appState.settingsStore.skipAgentPermissions)
+    }
 
     // Permissions state
     @State private var screenRecordingGranted = false
