@@ -21,6 +21,7 @@ struct BundleIDSetupView: View {
     @State private var progressMessage = ""
     @State private var error: String?
     @State private var createdBundleId = ""
+    @State private var createdAppName = ""
     @State private var capabilitiesEnabled = 0
     @State private var showAdditional = false
 
@@ -367,7 +368,7 @@ struct BundleIDSetupView: View {
                             createInstructionStep(1, "Go to **[App Store Connect](https://appstoreconnect.apple.com/apps)** and click the **+** button")
                             createInstructionStep(2, "Select **New App**")
                             createInstructionStep(3, "Choose your platform (**iOS** or **macOS**)")
-                            createInstructionStep(4, "Enter your app name and select the **Bundle ID** you just registered: **\(createdBundleId)**")
+                            createInstructionStep(4, "Enter the app name **\(createdAppName)** and select the **Bundle ID** you just registered: **\(createdBundleId)**")
                             createInstructionStep(5, "Set a **SKU** (any unique string, e.g. your app name)")
                             createInstructionStep(6, "Click **Create**")
                         }
@@ -487,6 +488,7 @@ struct BundleIDSetupView: View {
                 }
 
                 createdBundleId = bundleId
+                createdAppName = bundleName.trimmingCharacters(in: .whitespacesAndNewlines)
                 capabilitiesEnabled = enabled
                 phase = .manual
 
@@ -499,17 +501,31 @@ struct BundleIDSetupView: View {
 
     private func confirmAppCreated() {
         error = nil
+        let expectedBundleId = createdBundleId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let expectedAppName = createdAppName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !expectedBundleId.isEmpty else {
+            error = "The registered bundle ID is missing. Register the bundle ID again before confirming."
+            phase = .manual
+            return
+        }
+        guard !expectedAppName.isEmpty else {
+            error = "The expected app name is missing. Register the bundle ID again before confirming."
+            phase = .manual
+            return
+        }
+
         phase = .confirming
 
         Task {
-            await asc.fetchApp(bundleId: createdBundleId)
+            let found = await asc.fetchApp(bundleId: expectedBundleId, exactName: expectedAppName)
 
-            if asc.app != nil {
+            if found {
                 asc.credentialsError = nil
                 asc.resetTabState()
                 await asc.fetchTabData(tab)
             } else {
-                error = "App not found in App Store Connect. Make sure you created the app with bundle ID \"\(createdBundleId)\" and try again."
+                error = "App not found in App Store Connect. Create the app with the exact name \"\(expectedAppName)\" and bundle ID \"\(expectedBundleId)\", then try again."
                 phase = .manual
             }
         }
