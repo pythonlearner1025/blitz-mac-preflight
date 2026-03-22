@@ -122,6 +122,9 @@ cat > "$BUNDLE_DIR/Contents/Info.plist" << PLIST
 </plist>
 PLIST
 
+# Remove stale codesign temp files from previous failed signing attempts
+find "$BUNDLE_DIR" -name "*.cstemp" -delete 2>/dev/null || true
+
 # Sign nested native binaries first (inside-out — required for notarization)
 if [ "$SIGNING_IDENTITY" != "-" ]; then
     echo "Signing native dependencies..."

@@ -105,60 +105,112 @@ fi
 RESOURCES_DIR="$APP_DIR/Contents/Resources"
 
 # ============================================================================
-# Install Node.js runtime to ~/.blitz/node-runtime
+# Find or install Node.js (>= 18) for running iphone-mcp
 # ============================================================================
 
 T_NODE_START=$(date +%s)
-NODE_VERSION="v22.16.0"
+NODE_MIN_MAJOR=18
+NODE_FALLBACK_VERSION="v22.16.0"
 BLITZ_NODE_DIR="$CONSOLE_HOME/.blitz/node-runtime"
+NODE_BIN_PATH_FILE="$CONSOLE_HOME/.blitz/node-bin-path"
 NODE_DIR=""
 
-if [ -x "$BLITZ_NODE_DIR/bin/node" ]; then
-    EXISTING_NODE=$("$BLITZ_NODE_DIR/bin/node" --version 2>/dev/null || echo "")
-    if [ "$EXISTING_NODE" = "$NODE_VERSION" ]; then
-        echo "OK: Node.js $NODE_VERSION already installed at $BLITZ_NODE_DIR" >> "$LOG"
-        NODE_DIR="$BLITZ_NODE_DIR/bin"
+# Check if the user already has Node.js >= 18 installed
+find_system_node() {
+    # Check user's PATH first
+    local candidate
+    candidate=$(run_as_user which node 2>/dev/null || true)
+    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+        echo "$(dirname "$candidate")"
+        return
+    fi
+    # Check common locations
+    for candidate in /opt/homebrew/bin/node /usr/local/bin/node; do
+        if [ -x "$candidate" ]; then
+            echo "$(dirname "$candidate")"
+            return
+        fi
+    done
+}
+
+node_major_version() {
+    local version=$("$1/node" --version 2>/dev/null || echo "")
+    echo "$version" | sed 's/^v//' | cut -d. -f1
+}
+
+SYSTEM_NODE_DIR=$(find_system_node)
+if [ -n "$SYSTEM_NODE_DIR" ] && [ -x "$SYSTEM_NODE_DIR/node" ]; then
+    MAJOR=$(node_major_version "$SYSTEM_NODE_DIR")
+    if [ -n "$MAJOR" ] && [ "$MAJOR" -ge "$NODE_MIN_MAJOR" ] 2>/dev/null; then
+        NODE_DIR="$SYSTEM_NODE_DIR"
+        echo "OK: Using system Node.js ($("$NODE_DIR/node" --version 2>/dev/null)) at $NODE_DIR" >> "$LOG"
     else
-        echo "Node.js version mismatch ($EXISTING_NODE vs $NODE_VERSION), reinstalling..." >> "$LOG"
-        rm -rf "$BLITZ_NODE_DIR"
+        echo "System Node.js too old (v$MAJOR, need >= $NODE_MIN_MAJOR), will install bundled runtime" >> "$LOG"
     fi
 fi
 
+# Fall back to bundled node-runtime if no adequate system Node found
 if [ -z "$NODE_DIR" ]; then
-    echo "Installing Node.js $NODE_VERSION..." >> "$LOG"
-    show_progress "Installing Node.js runtime..."
-
-    ARCH=$(uname -m)
-    if [ "$ARCH" = "arm64" ]; then
-        NODE_ARCH="arm64"
-    else
-        NODE_ARCH="x64"
-    fi
-    NODE_TARBALL="node-${NODE_VERSION}-darwin-${NODE_ARCH}.tar.gz"
-    NODE_URL="https://nodejs.org/dist/${NODE_VERSION}/${NODE_TARBALL}"
-
-    NODE_TMP="/tmp/blitz-node-$$"
-    rm -rf "$NODE_TMP"
-    mkdir -p "$NODE_TMP"
-
-    if curl -fsSL "$NODE_URL" -o "$NODE_TMP/$NODE_TARBALL" 2>> "$LOG"; then
-        mkdir -p "$BLITZ_NODE_DIR"
-        tar -xzf "$NODE_TMP/$NODE_TARBALL" -C "$BLITZ_NODE_DIR" --strip-components=1 2>> "$LOG"
-        if [ "$IS_ROOT" = true ]; then chown -R "$CONSOLE_USER" "$BLITZ_NODE_DIR"; fi
-        echo "Node.js $("$BLITZ_NODE_DIR/bin/node" --version 2>/dev/null) installed to $BLITZ_NODE_DIR" >> "$LOG"
-        NODE_DIR="$BLITZ_NODE_DIR/bin"
-    else
-        echo "ERROR: Failed to download Node.js from $NODE_URL" >> "$LOG"
+    if [ -x "$BLITZ_NODE_DIR/bin/node" ]; then
+        EXISTING_NODE=$("$BLITZ_NODE_DIR/bin/node" --version 2>/dev/null || echo "")
+        if [ "$EXISTING_NODE" = "$NODE_FALLBACK_VERSION" ]; then
+            echo "OK: Node.js $NODE_FALLBACK_VERSION already installed at $BLITZ_NODE_DIR" >> "$LOG"
+            NODE_DIR="$BLITZ_NODE_DIR/bin"
+        else
+            echo "Node.js version mismatch ($EXISTING_NODE vs $NODE_FALLBACK_VERSION), reinstalling..." >> "$LOG"
+            rm -rf "$BLITZ_NODE_DIR"
+        fi
     fi
 
-    rm -rf "$NODE_TMP"
+    if [ -z "$NODE_DIR" ]; then
+        echo "Installing Node.js $NODE_FALLBACK_VERSION..." >> "$LOG"
+        show_progress "Installing Node.js runtime..."
+
+        ARCH=$(uname -m)
+        if [ "$ARCH" = "arm64" ]; then
+            NODE_ARCH="arm64"
+        else
+            NODE_ARCH="x64"
+        fi
+        NODE_TARBALL="node-${NODE_FALLBACK_VERSION}-darwin-${NODE_ARCH}.tar.gz"
+        NODE_URL="https://nodejs.org/dist/${NODE_FALLBACK_VERSION}/${NODE_TARBALL}"
+
+        NODE_TMP="/tmp/blitz-node-$$"
+        rm -rf "$NODE_TMP"
+        mkdir -p "$NODE_TMP"
+
+        if curl -fsSL "$NODE_URL" -o "$NODE_TMP/$NODE_TARBALL" 2>> "$LOG"; then
+            mkdir -p "$BLITZ_NODE_DIR"
+            tar -xzf "$NODE_TMP/$NODE_TARBALL" -C "$BLITZ_NODE_DIR" --strip-components=1 2>> "$LOG"
+            if [ "$IS_ROOT" = true ]; then chown -R "$CONSOLE_USER" "$BLITZ_NODE_DIR"; fi
+            echo "Node.js $("$BLITZ_NODE_DIR/bin/node" --version 2>/dev/null) installed to $BLITZ_NODE_DIR" >> "$LOG"
+            NODE_DIR="$BLITZ_NODE_DIR/bin"
+        else
+            echo "ERROR: Failed to download Node.js from $NODE_URL" >> "$LOG"
+        fi
+
+        rm -rf "$NODE_TMP"
+    fi
 fi
 
 if [ -z "$NODE_DIR" ] || [ ! -x "$NODE_DIR/node" ]; then
-    fail "Failed to install Node.js $NODE_VERSION. Check /tmp/blitz_install.log for details."
+    fail "Failed to find or install Node.js. Check /tmp/blitz_install.log for details."
 fi
 echo "Node ready at: $NODE_DIR/node ($("$NODE_DIR/node" --version 2>/dev/null))" >> "$LOG"
-echo "TIMING: node install took $(( $(date +%s) - T_NODE_START ))s" >> "$LOG"
+
+# Persist the chosen node bin path so the app knows which one to use
+echo "$NODE_DIR" > "$NODE_BIN_PATH_FILE"
+if [ "$IS_ROOT" = true ]; then chown "$CONSOLE_USER" "$NODE_BIN_PATH_FILE" 2>/dev/null || true; fi
+
+# Install/update @blitzdev/iphone-mcp globally into the chosen Node runtime
+echo "Installing @blitzdev/iphone-mcp..." >> "$LOG"
+if run_as_user "$NODE_DIR/npm" install -g @blitzdev/iphone-mcp@latest >> "$LOG" 2>&1; then
+    echo "OK: iphone-mcp installed ($("$NODE_DIR/iphone-mcp" --version 2>/dev/null || echo 'unknown version'))" >> "$LOG"
+else
+    echo "WARNING: Failed to install @blitzdev/iphone-mcp" >> "$LOG"
+fi
+
+echo "TIMING: node setup took $(( $(date +%s) - T_NODE_START ))s" >> "$LOG"
 
 if [ ! -d "$APP_DIR" ]; then
     echo "WARNING: Blitz.app not found in /Applications — skipping chown (app may be installed later)." >> "$LOG"

@@ -13,6 +13,7 @@ final class MCPBootstrap {
 
         installBridgeScript()
         installClaudeSkills()
+        updateIphoneMCP()
 
         let server = MCPServerService(appState: appState)
         self.server = server
@@ -58,6 +59,37 @@ final class MCPBootstrap {
             }
         } catch {
             print("[MCP] Failed to install Claude skills: \(error)")
+        }
+    }
+
+    /// Background-update @blitzdev/iphone-mcp in the bundled Node runtime.
+    /// Runs `npm install -g @blitzdev/iphone-mcp@latest` so the binary at
+    /// ~/.blitz/node-runtime/bin/iphone-mcp stays current with each app launch.
+    private func updateIphoneMCP() {
+        let npm = BlitzPaths.nodeDir.appendingPathComponent("npm").path
+        guard FileManager.default.isExecutableFile(atPath: npm) else { return }
+
+        Task.detached(priority: .utility) {
+            do {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: npm)
+                process.arguments = ["install", "-g", "@blitzdev/iphone-mcp@latest"]
+                process.environment = [
+                    "PATH": "\(BlitzPaths.nodeDir.path):/usr/bin:/bin",
+                    "HOME": FileManager.default.homeDirectoryForCurrentUser.path
+                ]
+                process.standardOutput = nil
+                process.standardError = nil
+                try process.run()
+                process.waitUntilExit()
+                if process.terminationStatus == 0 {
+                    print("[MCP] iphone-mcp updated successfully")
+                } else {
+                    print("[MCP] iphone-mcp update failed (exit \(process.terminationStatus))")
+                }
+            } catch {
+                print("[MCP] iphone-mcp update error: \(error)")
+            }
         }
     }
 
