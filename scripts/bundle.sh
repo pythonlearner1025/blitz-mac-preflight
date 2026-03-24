@@ -15,6 +15,38 @@ SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
 ENTITLEMENTS="$ROOT_DIR/scripts/Entitlements.plist"
 TIMESTAMP_MODE="${CODESIGN_TIMESTAMP:-auto}"
 
+resolve_ascd_path() {
+    local candidates=()
+
+    if [ -n "${BLITZ_ASCD_PATH:-}" ]; then
+        candidates+=("$BLITZ_ASCD_PATH")
+    fi
+
+    if command -v ascd >/dev/null 2>&1; then
+        candidates+=("$(command -v ascd)")
+    fi
+
+    candidates+=(
+        "$HOME/.blitz/ascd"
+        "$HOME/.local/bin/ascd"
+        "/opt/homebrew/bin/ascd"
+        "/usr/local/bin/ascd"
+        "/opt/local/bin/ascd"
+        "$HOME/superapp/asc-cli/forks/App-Store-Connect-CLI-helper/build/ascd"
+    )
+
+    local candidate
+    for candidate in "${candidates[@]}"; do
+        [ -n "$candidate" ] || continue
+        if [ -x "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 if [ "$CONFIG" = "debug" ] && [ "$TIMESTAMP_MODE" = "auto" ]; then
     TIMESTAMP_MODE="none"
 fi
@@ -50,6 +82,18 @@ if [ -f "$HELPER_BINARY" ]; then
     echo "Copied blitz-macos-mcp helper into app bundle"
 else
     echo "WARNING: blitz-macos-mcp helper was not built; MCP integration will be unavailable."
+fi
+
+ASC_HELPER_BINARY="$(resolve_ascd_path || true)"
+if [ -n "$ASC_HELPER_BINARY" ]; then
+    cp "$ASC_HELPER_BINARY" "$BUNDLE_DIR/Contents/Helpers/ascd"
+    chmod 755 "$BUNDLE_DIR/Contents/Helpers/ascd"
+    echo "Copied ascd helper into app bundle from $ASC_HELPER_BINARY"
+else
+    echo "ERROR: ascd helper not found."
+    echo "       Set BLITZ_ASCD_PATH, install ascd on PATH, or build it at:"
+    echo "       $HOME/superapp/asc-cli/forks/App-Store-Connect-CLI-helper/build/ascd"
+    exit 1
 fi
 
 # Generate app icon (.icns) from PNG
@@ -182,6 +226,10 @@ if [ "$SIGNING_IDENTITY" != "-" ]; then
     if [ -f "$BUNDLE_DIR/Contents/Helpers/blitz-macos-mcp" ]; then
         codesign_bundle_path "$BUNDLE_DIR/Contents/Helpers/blitz-macos-mcp"
         echo "  Signed: $BUNDLE_DIR/Contents/Helpers/blitz-macos-mcp"
+    fi
+    if [ -f "$BUNDLE_DIR/Contents/Helpers/ascd" ]; then
+        codesign_bundle_path "$BUNDLE_DIR/Contents/Helpers/ascd"
+        echo "  Signed: $BUNDLE_DIR/Contents/Helpers/ascd"
     fi
 fi
 

@@ -30,6 +30,12 @@ if [ ! -d "$SOURCE_APP" ]; then
     exit 1
 fi
 
+if [ ! -x "$SOURCE_APP/Contents/Helpers/ascd" ]; then
+    echo "ERROR: $SOURCE_APP does not contain a bundled ascd helper."
+    echo "Rebuild the app bundle after installing or building ascd."
+    exit 1
+fi
+
 # Clean build dir and stale .pkg files
 rm -rf "$BUILD_DIR"
 rm -f "$ROOT_DIR/build/$APP_NAME-"*.pkg
@@ -67,6 +73,12 @@ if [ -n "$APP_SIGNING_IDENTITY" ]; then
             --sign "$APP_SIGNING_IDENTITY" \
             --entitlements "$ENTITLEMENTS" \
             "$APP_PAYLOAD/Contents/Helpers/blitz-macos-mcp"
+    fi
+    if [ -f "$APP_PAYLOAD/Contents/Helpers/ascd" ]; then
+        codesign --force --options runtime --timestamp \
+            --sign "$APP_SIGNING_IDENTITY" \
+            --entitlements "$ENTITLEMENTS" \
+            "$APP_PAYLOAD/Contents/Helpers/ascd"
     fi
 
     # Re-sign the main app bundle (must be last)

@@ -1,187 +1,94 @@
 import Foundation
-import CryptoKit
-
-// MARK: - Error
-
-enum ASCError: LocalizedError {
-    case invalidURL
-    case notFound(String)
-    case httpError(Int, String)
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidURL: return "Invalid URL"
-        case .notFound(let what): return "\(what) not found"
-        case .httpError(let code, let body): return "HTTP \(code): \(Self.parseErrorMessages(body))"
-        }
-    }
-
-    var isConflict: Bool {
-        if case .httpError(409, _) = self { return true }
-        return false
-    }
-
-    /// Extract human-readable error messages from ASC JSON error responses.
-    private static func parseErrorMessages(_ body: String) -> String {
-        guard let data = body.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let errors = json["errors"] as? [[String: Any]] else {
-            return String(body.prefix(300))
-        }
-        var messages: [String] = []
-        for error in errors {
-            if let detail = error["detail"] as? String {
-                messages.append(detail)
-            } else if let title = error["title"] as? String {
-                messages.append(title)
-            }
-            // Parse associatedErrors for richer context
-            if let meta = error["meta"] as? [String: Any],
-               let assoc = meta["associatedErrors"] as? [String: [[String: Any]]] {
-                for (_, subErrors) in assoc {
-                    for sub in subErrors {
-                        if let detail = sub["detail"] as? String {
-                            messages.append(detail)
-                        } else if let title = sub["title"] as? String {
-                            messages.append(title)
-                        }
-                    }
-                }
-            }
-        }
-        return messages.isEmpty ? String(body.prefix(300)) : messages.joined(separator: "\n")
-    }
-}
-
-// MARK: - Service
 
 final class AppStoreConnectService {
-    private let credentials: ASCCredentials
-    private var cachedToken: String?
-    private var tokenExpiry: Date?
-
-    private let baseHost = "api.appstoreconnect.apple.com"
+    private let client: ASCDaemonClient
     private let session = URLSession.shared
 
     init(credentials: ASCCredentials) {
-        self.credentials = credentials
-    }
-
-    // MARK: - JWT
-
-    private func generateJWT() throws -> String {
-        let now = Date()
-        let expiry = now.addingTimeInterval(1200)
-
-        let header: [String: Any] = [
-            "alg": "ES256",
-            "kid": credentials.keyId,
-            "typ": "JWT"
-        ]
-        let payload: [String: Any] = [
-            "iss": credentials.issuerId,
-            "iat": Int(now.timeIntervalSince1970),
-            "exp": Int(expiry.timeIntervalSince1970),
-            "aud": "appstoreconnect-v1"
-        ]
-
-        let headerData = try JSONSerialization.data(withJSONObject: header)
-        let payloadData = try JSONSerialization.data(withJSONObject: payload)
-        let headerEncoded = base64urlEncode(headerData)
-        let payloadEncoded = base64urlEncode(payloadData)
-        let message = "\(headerEncoded).\(payloadEncoded)"
-
-        let privateKey = try P256.Signing.PrivateKey(pemRepresentation: credentials.privateKey)
-        let signature = try privateKey.signature(for: Data(message.utf8))
-        let signatureEncoded = base64urlEncode(signature.rawRepresentation)
-
-        tokenExpiry = expiry
-        return "\(message).\(signatureEncoded)"
-    }
-
-    private func validToken() throws -> String {
-        if let token = cachedToken, let expiry = tokenExpiry,
-           Date().addingTimeInterval(60) < expiry {
-            return token
-        }
-        let token = try generateJWT()
-        cachedToken = token
-        return token
-    }
-
-    private func base64urlEncode(_ data: Data) -> String {
-        data.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .trimmingCharacters(in: CharacterSet(charactersIn: "="))
+        self.client = ASCDaemonClient(credentials: credentials)
     }
 
     // MARK: - HTTP
 
-    private func makeRequest(path: String, queryItems: [URLQueryItem] = []) throws -> URLRequest {
+    private func resolvedPath(_ rawPath: String, queryItems: [URLQueryItem] = []) throws -> String {
+        let trimmedPath = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else { throw ASCError.invalidURL }
+
+        if trimmedPath.hasPrefix("http://") || trimmedPath.hasPrefix("https://") {
+            guard var components = URLComponents(string: trimmedPath) else {
+                throw ASCError.invalidURL
+            }
+            if !queryItems.isEmpty {
+                components.queryItems = (components.queryItems ?? []) + queryItems
+            }
+            guard let path = components.string else { throw ASCError.invalidURL }
+            return path
+        }
+
         var components = URLComponents()
-        components.scheme = "https"
-        components.host = baseHost
-        components.path = "/v1/\(path)"
+        components.path = trimmedPath.hasPrefix("/") ? trimmedPath : "/v1/\(trimmedPath)"
         if !queryItems.isEmpty {
             components.queryItems = queryItems
         }
-        guard let url = components.url else { throw ASCError.invalidURL }
-
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 30
-        request.setValue("Bearer \(try validToken())", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        return request
+        guard let path = components.string else { throw ASCError.invalidURL }
+        return path
     }
 
     private func get<T: Decodable>(_ path: String, queryItems: [URLQueryItem] = [], as type: T.Type) async throws -> T {
-        let request = try makeRequest(path: path, queryItems: queryItems)
-        let (data, response) = try await session.data(for: request)
-
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw ASCError.httpError(http.statusCode, body)
+        let response = try await client.request(
+            method: "GET",
+            path: try resolvedPath(path, queryItems: queryItems),
+            headers: ["Accept": "application/json"]
+        )
+        if !(200..<300).contains(response.statusCode) {
+            let body = String(data: response.body, encoding: .utf8) ?? ""
+            throw ASCError.httpError(response.statusCode, body)
         }
-
-        return try JSONDecoder().decode(T.self, from: data)
+        return try JSONDecoder().decode(T.self, from: response.body)
     }
 
     private func patch(path: String, body: [String: Any]) async throws {
-        var request = try makeRequest(path: path)
-        request.httpMethod = "PATCH"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw ASCError.httpError(http.statusCode, body)
+        let response = try await client.request(
+            method: "PATCH",
+            path: try resolvedPath(path),
+            headers: [
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            ],
+            body: try JSONSerialization.data(withJSONObject: body)
+        )
+        if !(200..<300).contains(response.statusCode) {
+            let body = String(data: response.body, encoding: .utf8) ?? ""
+            throw ASCError.httpError(response.statusCode, body)
         }
     }
 
     private func post(path: String, body: [String: Any]) async throws -> Data {
-        var request = try makeRequest(path: path)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw ASCError.httpError(http.statusCode, body)
+        let response = try await client.request(
+            method: "POST",
+            path: try resolvedPath(path),
+            headers: [
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            ],
+            body: try JSONSerialization.data(withJSONObject: body)
+        )
+        if !(200..<300).contains(response.statusCode) {
+            let body = String(data: response.body, encoding: .utf8) ?? ""
+            throw ASCError.httpError(response.statusCode, body)
         }
-        return data
+        return response.body
     }
 
     private func delete(path: String) async throws {
-        var request = try makeRequest(path: path)
-        request.httpMethod = "DELETE"
-
-        let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw ASCError.httpError(http.statusCode, body)
+        let response = try await client.request(
+            method: "DELETE",
+            path: try resolvedPath(path),
+            headers: ["Accept": "application/json"]
+        )
+        if !(200..<300).contains(response.statusCode) {
+            let body = String(data: response.body, encoding: .utf8) ?? ""
+            throw ASCError.httpError(response.statusCode, body)
         }
     }
 
@@ -189,73 +96,20 @@ final class AppStoreConnectService {
         try await delete(path: "appScreenshots/\(screenshotId)")
     }
 
-    // MARK: - Versioned-Path HTTP Helpers (for /v2, /v3 endpoints)
-
-    private func makeRequest(fullPath: String, queryItems: [URLQueryItem] = []) throws -> URLRequest {
-        var components = URLComponents()
-        components.scheme = "https"
-        components.host = baseHost
-        components.path = fullPath
-        if !queryItems.isEmpty {
-            components.queryItems = queryItems
-        }
-        guard let url = components.url else { throw ASCError.invalidURL }
-
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 30
-        request.setValue("Bearer \(try validToken())", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        return request
-    }
-
     private func get<T: Decodable>(fullPath: String, queryItems: [URLQueryItem] = [], as type: T.Type) async throws -> T {
-        let request = try makeRequest(fullPath: fullPath, queryItems: queryItems)
-        let (data, response) = try await session.data(for: request)
-
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw ASCError.httpError(http.statusCode, body)
-        }
-
-        return try JSONDecoder().decode(T.self, from: data)
+        try await get(fullPath, queryItems: queryItems, as: type)
     }
 
     private func post(fullPath: String, body: [String: Any]) async throws -> Data {
-        var request = try makeRequest(fullPath: fullPath)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw ASCError.httpError(http.statusCode, body)
-        }
-        return data
+        try await post(path: fullPath, body: body)
     }
 
     private func patch(fullPath: String, body: [String: Any]) async throws {
-        var request = try makeRequest(fullPath: fullPath)
-        request.httpMethod = "PATCH"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw ASCError.httpError(http.statusCode, body)
-        }
+        try await patch(path: fullPath, body: body)
     }
 
     private func delete(fullPath: String) async throws {
-        var request = try makeRequest(fullPath: fullPath)
-        request.httpMethod = "DELETE"
-
-        let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw ASCError.httpError(http.statusCode, body)
-        }
+        try await delete(path: fullPath)
     }
 
     private func upload(url: URL, method: String, headers: [String: String], body: Data) async throws {
@@ -615,14 +469,30 @@ final class AppStoreConnectService {
             "apps/\(appId)/appPriceSchedule",
             as: ASCSingleResponse<ASCPriceSchedule>.self
         )
-        let prices = try await get(
-            "appPriceSchedules/\(schedule.data.id)/manualPrices",
-            queryItems: [
-                URLQueryItem(name: "include", value: "appPricePoint"),
-                URLQueryItem(name: "limit", value: "200")
-            ],
-            as: ASCListResponse<ASCAppPrice>.self
+        let pricesResponse = try await client.request(
+            method: "GET",
+            path: try resolvedPath(
+                "appPriceSchedules/\(schedule.data.id)/manualPrices",
+                queryItems: [
+                    URLQueryItem(name: "include", value: "appPricePoint"),
+                    URLQueryItem(name: "limit", value: "200")
+                ]
+            ),
+            headers: ["Accept": "application/json"],
+            expectedStatusCodes: [404]
         )
+        if pricesResponse.statusCode == 404 {
+            return ASCAppPricingState(
+                currentPricePointId: nil,
+                scheduledPricePointId: nil,
+                scheduledEffectiveDate: nil
+            )
+        }
+        guard (200..<300).contains(pricesResponse.statusCode) else {
+            let body = String(data: pricesResponse.body, encoding: .utf8) ?? ""
+            throw ASCError.httpError(pricesResponse.statusCode, body)
+        }
+        let prices = try JSONDecoder().decode(ASCListResponse<ASCAppPrice>.self, from: pricesResponse.body)
 
         let today = Self.isoDateString(referenceDate)
         let sortedByStartDesc = prices.data.sorted { lhs, rhs in
@@ -1351,7 +1221,7 @@ final class AppStoreConnectService {
     // MARK: - Write: Build Encryption
 
     func patchBuildEncryption(buildId: String, usesNonExemptEncryption: Bool) async throws {
-        let body: [String: Any] = [
+        let requestBody: [String: Any] = [
             "data": [
                 "type": "builds",
                 "id": buildId,
@@ -1360,7 +1230,29 @@ final class AppStoreConnectService {
                 ]
             ]
         ]
-        try await patch(path: "builds/\(buildId)", body: body)
+        let response = try await client.request(
+            method: "PATCH",
+            path: try resolvedPath("builds/\(buildId)"),
+            headers: [
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            ],
+            body: try JSONSerialization.data(withJSONObject: requestBody),
+            expectedStatusCodes: [409]
+        )
+        if (200..<300).contains(response.statusCode) {
+            return
+        }
+        if response.statusCode == 409 {
+            let responseBody = String(data: response.body, encoding: .utf8) ?? ""
+            if responseBody.contains("You cannot update when the value is already set.")
+                || responseBody.contains("/data/attributes/usesNonExemptEncryption") {
+                return
+            }
+            throw ASCError.httpError(response.statusCode, responseBody)
+        }
+        let responseBody = String(data: response.body, encoding: .utf8) ?? ""
+        throw ASCError.httpError(response.statusCode, responseBody)
     }
 
     // MARK: - Fetch: AppInfo
@@ -1423,11 +1315,23 @@ final class AppStoreConnectService {
                 as: ASCSingleResponse<ASCPriceSchedule>.self
             )
             // Then check if it has manual prices configured
-            let prices = try await get(
-                "appPriceSchedules/\(schedule.data.id)/manualPrices",
-                queryItems: [URLQueryItem(name: "limit", value: "1")],
-                as: ASCListResponse<ASCPriceScheduleEntry>.self
+            let pricesResponse = try await client.request(
+                method: "GET",
+                path: try resolvedPath(
+                    "appPriceSchedules/\(schedule.data.id)/manualPrices",
+                    queryItems: [URLQueryItem(name: "limit", value: "1")]
+                ),
+                headers: ["Accept": "application/json"],
+                expectedStatusCodes: [404]
             )
+            if pricesResponse.statusCode == 404 {
+                return false
+            }
+            guard (200..<300).contains(pricesResponse.statusCode) else {
+                let body = String(data: pricesResponse.body, encoding: .utf8) ?? ""
+                throw ASCError.httpError(pricesResponse.statusCode, body)
+            }
+            let prices = try JSONDecoder().decode(ASCListResponse<ASCPriceScheduleEntry>.self, from: pricesResponse.body)
             return !prices.data.isEmpty
         } catch {
             return false
@@ -1584,10 +1488,9 @@ final class AppStoreConnectService {
     func fetchReviewSubmissions(appId: String) async throws -> [ASCReviewSubmission] {
         let resp = try await get("reviewSubmissions", queryItems: [
             URLQueryItem(name: "filter[app]", value: appId),
-            URLQueryItem(name: "sort", value: "-submittedDate"),
             URLQueryItem(name: "limit", value: "10")
         ], as: ASCPaginatedResponse<ASCReviewSubmission>.self)
-        return resp.data
+        return sortReviewSubmissions(resp.data)
     }
 
     func fetchReviewSubmissionItems(submissionId: String) async throws -> [ASCReviewSubmissionItem] {
@@ -1595,6 +1498,46 @@ final class AppStoreConnectService {
             URLQueryItem(name: "limit", value: "50")
         ], as: ASCPaginatedResponse<ASCReviewSubmissionItem>.self)
         return resp.data
+    }
+
+    private func sortReviewSubmissions(_ submissions: [ASCReviewSubmission]) -> [ASCReviewSubmission] {
+        let fractionalFormatter = ISO8601DateFormatter()
+        fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        let standardFormatter = ISO8601DateFormatter()
+        standardFormatter.formatOptions = [.withInternetDateTime]
+
+        return submissions
+            .enumerated()
+            .sorted { lhs, rhs in
+                let lhsDate = reviewSubmissionDate(
+                    lhs.element.attributes.submittedDate,
+                    fractionalFormatter: fractionalFormatter,
+                    standardFormatter: standardFormatter
+                )
+                let rhsDate = reviewSubmissionDate(
+                    rhs.element.attributes.submittedDate,
+                    fractionalFormatter: fractionalFormatter,
+                    standardFormatter: standardFormatter
+                )
+
+                if lhsDate != rhsDate {
+                    return lhsDate > rhsDate
+                }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
+    }
+
+    private func reviewSubmissionDate(
+        _ value: String?,
+        fractionalFormatter: ISO8601DateFormatter,
+        standardFormatter: ISO8601DateFormatter
+    ) -> Date {
+        guard let value, !value.isEmpty else { return .distantPast }
+        return fractionalFormatter.date(from: value)
+            ?? standardFormatter.date(from: value)
+            ?? .distantPast
     }
 
     // MARK: - Submit for Review
@@ -1637,80 +1580,12 @@ final class AppStoreConnectService {
     }
 }
 
-// MARK: - Supporting Types for Upload/Submission
-
-struct ASCPricePoint: Decodable, Identifiable {
-    let id: String
-    struct Attributes: Decodable {
-        let customerPrice: String?
-    }
-    let attributes: Attributes
-}
-
-struct ASCScreenshotReservation: Decodable, Identifiable {
-    let id: String
-    struct Attributes: Decodable {
-        let sourceFileChecksum: String?
-        let uploadOperations: [UploadOperation]?
-    }
-    let attributes: Attributes
-
-    struct UploadOperation: Decodable {
-        let method: String
-        let url: String
-        let offset: Int
-        let length: Int
-        let requestHeaders: [Header]
-
-        struct Header: Decodable {
-            let name: String
-            let value: String
-        }
-    }
-}
+// MARK: - Supporting Types
 
 private actor ProgressCounter {
     private var count = 0
     func increment() -> Int {
         count += 1
         return count
-    }
-}
-
-struct ASCReviewSubmission: Decodable, Identifiable {
-    let id: String
-    struct Attributes: Decodable {
-        let state: String?
-        let submittedDate: String?
-        let platform: String?
-    }
-    let attributes: Attributes
-}
-
-struct ASCReviewSubmissionItem: Decodable, Identifiable {
-    let id: String
-    struct Attributes: Decodable {
-        let state: String?
-        let resolved: Bool?
-        let createdDate: String?
-    }
-    let attributes: Attributes
-    let relationships: Relationships?
-
-    struct Relationships: Decodable {
-        let appStoreVersion: ToOneRelationship?
-
-        struct ToOneRelationship: Decodable {
-            let data: ResourceIdentifier?
-        }
-
-        struct ResourceIdentifier: Decodable {
-            let type: String
-            let id: String
-        }
-    }
-
-    var appStoreVersionId: String? {
-        relationships?.appStoreVersion?.data?.id
     }
 }
