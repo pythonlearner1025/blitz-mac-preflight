@@ -3,14 +3,11 @@ import SwiftUI
 
 /// All navigation tabs in the app
 enum AppTab: String, CaseIterable, Identifiable {
-    // Build group
-    case simulator
-    case database
-    case tests
-    case assets
+    // Top-level standalone tabs
+    case dashboard
+    case app
 
     // Release group (ASC)
-    case ascOverview
     case storeListing
     case screenshots
     case appDetails
@@ -34,7 +31,7 @@ enum AppTab: String, CaseIterable, Identifiable {
 
     var isASCTab: Bool {
         switch self {
-        case .ascOverview, .storeListing, .screenshots, .appDetails, .monetization, .review,
+        case .storeListing, .screenshots, .appDetails, .monetization, .review,
              .analytics, .reviews, .builds, .groups, .betaInfo, .feedback:
             return true
         default:
@@ -44,11 +41,8 @@ enum AppTab: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .simulator: "Simulator"
-        case .database: "Database"
-        case .tests: "Tests"
-        case .assets: "Assets"
-        case .ascOverview: "Overview"
+        case .dashboard: "Dashboard"
+        case .app: "App"
         case .storeListing: "Store Listing"
         case .screenshots: "Screenshots"
         case .appDetails: "App Details"
@@ -66,11 +60,8 @@ enum AppTab: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .simulator: "iphone"
-        case .database: "cylinder"
-        case .tests: "checkmark.circle"
-        case .assets: "photo.badge.plus"
-        case .ascOverview: "chart.bar"
+        case .dashboard: "square.grid.2x2"
+        case .app: "app"
         case .storeListing: "text.page"
         case .screenshots: "photo.on.rectangle"
         case .appDetails: "info.circle"
@@ -87,18 +78,47 @@ enum AppTab: String, CaseIterable, Identifiable {
     }
 
     enum Group: String, CaseIterable {
-        case build = "Build"
         case release = "Release"
         case insights = "Insights"
         case testFlight = "TestFlight"
 
         var tabs: [AppTab] {
             switch self {
-            case .build: [.simulator, .database, .tests, .assets]
-            case .release: [.ascOverview, .storeListing, .screenshots, .appDetails, .monetization, .review]
+            case .release: [.storeListing, .screenshots, .appDetails, .monetization, .review]
             case .insights: [.analytics, .reviews]
             case .testFlight: [.builds, .groups, .betaInfo, .feedback]
             }
+        }
+    }
+}
+
+/// Sub-tabs within the App tab (top navbar)
+enum AppSubTab: String, CaseIterable, Identifiable {
+    case overview
+    case simulator
+    case database
+    case tests
+    case icon
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .overview: "Overview"
+        case .simulator: "Simulator"
+        case .database: "Database"
+        case .tests: "Tests"
+        case .icon: "Icon"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .overview: "chart.bar"
+        case .simulator: "iphone"
+        case .database: "cylinder"
+        case .tests: "checkmark.circle"
+        case .icon: "photo.badge.plus"
         }
     }
 }
@@ -109,7 +129,8 @@ enum AppTab: String, CaseIterable, Identifiable {
 final class AppState {
     // Navigation
     var activeProjectId: String?
-    var activeTab: AppTab = .simulator
+    var activeTab: AppTab = .dashboard
+    var activeAppSubTab: AppSubTab = .overview
 
     // Child observable managers
     var projectManager = ProjectManager()

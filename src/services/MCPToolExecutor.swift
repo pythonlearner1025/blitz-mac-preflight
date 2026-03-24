@@ -80,7 +80,7 @@ actor MCPToolExecutor {
             default: targetTab = nil
             }
         } else if name == "asc_open_submit_preview" {
-            targetTab = .ascOverview
+            targetTab = .app
         } else if name == "screenshots_add_asset"
                     || name == "screenshots_set_track" || name == "screenshots_save" {
             targetTab = .screenshots
@@ -305,6 +305,7 @@ actor MCPToolExecutor {
         let state = await MainActor.run { () -> [String: Any] in
             var result: [String: Any] = [
                 "activeTab": appState.activeTab.rawValue,
+                "activeAppSubTab": appState.activeAppSubTab.rawValue,
                 "isStreaming": appState.simulatorStream.isCapturing
             ]
             if let project = appState.activeProject {
@@ -334,30 +335,58 @@ actor MCPToolExecutor {
     // MARK: - Navigation Tools
 
     private func executeNavSwitchTab(_ args: [String: Any]) async throws -> [String: Any] {
-        guard let tabStr = args["tab"] as? String,
-              let tab = AppTab(rawValue: tabStr) else {
+        guard let tabStr = args["tab"] as? String else {
+            throw MCPServerService.MCPError.invalidToolArgs
+        }
+
+        // Map legacy tab names to new App sub-tabs
+        let legacySubTabMap: [String: AppSubTab] = [
+            "simulator": .simulator,
+            "database": .database,
+            "tests": .tests,
+            "assets": .icon,
+            "icon": .icon,
+            "ascOverview": .overview,
+            "overview": .overview,
+        ]
+
+        if let subTab = legacySubTabMap[tabStr] {
+            await MainActor.run {
+                appState.activeTab = .app
+                appState.activeAppSubTab = subTab
+            }
+
+            // Auto-connect database when switching to database sub-tab
+            if subTab == .database {
+                let status = await MainActor.run { appState.databaseManager.connectionStatus }
+                if status != .connected, let project = await MainActor.run(body: { appState.activeProject }) {
+                    await appState.databaseManager.startAndConnect(projectId: project.id, projectPath: project.path)
+                }
+            }
+
+            return mcpText("Switched to App > \(subTab.label)")
+        }
+
+        guard let tab = AppTab(rawValue: tabStr) else {
             throw MCPServerService.MCPError.invalidToolArgs
         }
         await MainActor.run { appState.activeTab = tab }
-
-        // Auto-connect database when switching to database tab
-        if tab == .database {
-            let status = await MainActor.run { appState.databaseManager.connectionStatus }
-            if status != .connected, let project = await MainActor.run(body: { appState.activeProject }) {
-                await appState.databaseManager.startAndConnect(projectId: project.id, projectPath: project.path)
-            }
-        }
 
         return mcpText("Switched to tab: \(tab.label)")
     }
 
     private func executeNavListTabs() async -> [String: Any] {
-        var groups: [[String: Any]] = []
+        // Top-level standalone tabs
+        let topLevel: [[String: Any]] = [
+            ["name": "dashboard", "label": "Dashboard", "icon": "square.grid.2x2"],
+            ["name": "app", "label": "App", "icon": "app",
+             "subTabs": AppSubTab.allCases.map { ["name": $0.rawValue, "label": $0.label, "icon": $0.systemImage] as [String: Any] }],
+        ]
+        var groups: [[String: Any]] = [["group": "Top", "tabs": topLevel]]
         for group in AppTab.Group.allCases {
             let tabs = group.tabs.map { ["name": $0.rawValue, "label": $0.label, "icon": $0.icon] as [String: Any] }
             groups.append(["group": group.rawValue, "tabs": tabs])
         }
-        // Include settings separately
         groups.append(["group": "Other", "tabs": [["name": "settings", "label": "Settings", "icon": "gear"]]])
         return mcpJSON(["groups": groups])
     }
@@ -903,7 +932,7 @@ actor MCPToolExecutor {
                         do {
                             try await service.attachBuild(versionId: versionId, buildId: latestBuild.id)
                             // Refresh data so readiness reflects the attached build
-                            await appState.ascManager.refreshTabData(.ascOverview)
+                            await appState.ascManager.refreshTabData(.app)
                             readiness = await MainActor.run { appState.ascManager.submissionReadiness }
                         } catch {
                             // Non-fatal: report in missing fields
@@ -1223,8 +1252,15 @@ actor MCPToolExecutor {
     private func executeGetTabState(_ args: [String: Any]) async throws -> [String: Any] {
         let tabStr = args["tab"] as? String
         let tab: AppTab
-        if let tabStr, let parsed = AppTab(rawValue: tabStr) {
-            tab = parsed
+        if let tabStr {
+            // Map legacy "ascOverview" to ".app"
+            if tabStr == "ascOverview" || tabStr == "overview" {
+                tab = .app
+            } else if let parsed = AppTab(rawValue: tabStr) {
+                tab = parsed
+            } else {
+                tab = await MainActor.run { appState.activeTab }
+            }
         } else {
             tab = await MainActor.run { appState.activeTab }
         }
@@ -1245,7 +1281,7 @@ actor MCPToolExecutor {
         }
 
         // Refresh IAP/subscription data for overview so readiness reflects latest state
-        if tab == .ascOverview {
+        if tab == .app {
             await appState.ascManager.refreshSubmissionReadinessData()
         }
 
@@ -1265,7 +1301,7 @@ actor MCPToolExecutor {
     @MainActor
     private func tabStateData(for tab: AppTab, asc: ASCManager, projectId: String?) -> [String: Any] {
         switch tab {
-        case .ascOverview:
+        case .app:
             if let pid = projectId {
                 asc.checkAppIcon(projectId: pid)
             }

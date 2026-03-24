@@ -92,8 +92,8 @@ struct ContentView: View {
 
             // Auto-boot simulator when project opens
             await appState.simulatorManager.bootIfNeeded()
-            // Auto-start stream if landing on simulator tab
-            if appState.activeTab == .simulator {
+            // Auto-start stream if landing on simulator sub-tab
+            if appState.activeTab == .app && appState.activeAppSubTab == .simulator {
                 await appState.simulatorStream.startStreaming(
                     bootedDeviceId: appState.simulatorManager.bootedDeviceId
                 )
@@ -107,6 +107,8 @@ struct ContentView: View {
                 )
                 if appState.activeTab.isASCTab {
                     await appState.ascManager.fetchTabData(appState.activeTab)
+                } else if appState.activeTab == .app && appState.activeAppSubTab == .overview {
+                    await appState.ascManager.fetchTabData(.app)
                 }
             }
         }
@@ -137,6 +139,8 @@ struct ContentView: View {
                         )
                         if appState.activeTab.isASCTab {
                             await appState.ascManager.fetchTabData(appState.activeTab)
+                        } else if appState.activeTab == .app && appState.activeAppSubTab == .overview {
+                            await appState.ascManager.fetchTabData(.app)
                         }
                     }
                 }
@@ -145,12 +149,15 @@ struct ContentView: View {
         .onChange(of: appState.activeTab) { oldTab, newTab in
             tabSwitchTask?.cancel()
             tabSwitchTask = Task {
-                // Pause stream when leaving simulator tab
-                if oldTab == .simulator && newTab != .simulator {
+                let isLeavingSimulator = oldTab == .app && appState.activeAppSubTab == .simulator
+                let isEnteringSimulator = newTab == .app && appState.activeAppSubTab == .simulator
+
+                // Pause stream when leaving simulator
+                if isLeavingSimulator && newTab != .app {
                     await appState.simulatorStream.pauseStream()
                 }
-                // Resume/start stream when entering simulator tab
-                if newTab == .simulator {
+                // Resume/start stream when entering simulator
+                if isEnteringSimulator {
                     if appState.simulatorStream.isPaused {
                         await appState.simulatorStream.resumeStream()
                     } else if !appState.simulatorStream.isCapturing {
@@ -162,6 +169,30 @@ struct ContentView: View {
                 // Fetch ASC data when entering any ASC tab
                 if newTab.isASCTab {
                     await appState.ascManager.fetchTabData(newTab)
+                }
+            }
+        }
+        .onChange(of: appState.activeAppSubTab) { oldSub, newSub in
+            guard appState.activeTab == .app else { return }
+            tabSwitchTask?.cancel()
+            tabSwitchTask = Task {
+                // Pause stream when leaving simulator sub-tab
+                if oldSub == .simulator && newSub != .simulator {
+                    await appState.simulatorStream.pauseStream()
+                }
+                // Resume/start stream when entering simulator sub-tab
+                if newSub == .simulator {
+                    if appState.simulatorStream.isPaused {
+                        await appState.simulatorStream.resumeStream()
+                    } else if !appState.simulatorStream.isCapturing {
+                        await appState.simulatorStream.startStreaming(
+                            bootedDeviceId: appState.simulatorManager.bootedDeviceId
+                        )
+                    }
+                }
+                // Fetch ASC overview data when entering overview sub-tab
+                if newSub == .overview {
+                    await appState.ascManager.fetchTabData(.app)
                 }
             }
         }
@@ -224,16 +255,10 @@ struct DetailView: View {
     @ViewBuilder
     private var activeTabView: some View {
         switch appState.activeTab {
-        case .simulator:
-            SimulatorView(appState: appState)
-        case .database:
-            DatabaseView(appState: appState)
-        case .tests:
-            TestsView(appState: appState)
-        case .assets:
-            AssetsView(appState: appState)
-        case .ascOverview:
-            ASCOverview(appState: appState)
+        case .dashboard:
+            DashboardView(appState: appState)
+        case .app:
+            AppTabView(appState: appState)
         case .storeListing:
             StoreListingView(appState: appState)
         case .screenshots:

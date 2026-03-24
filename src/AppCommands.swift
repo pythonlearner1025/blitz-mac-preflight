@@ -68,18 +68,20 @@ struct AppCommands: Commands {
         CommandGroup(after: .toolbar) {
             Divider()
 
-            Button("Simulator") {
-                appState.activeTab = .simulator
+            Button("Dashboard") {
+                appState.activeTab = .dashboard
             }
             .keyboardShortcut("1", modifiers: .command)
 
-            Button("Database") {
-                appState.activeTab = .database
+            Button("Simulator") {
+                appState.activeTab = .app
+                appState.activeAppSubTab = .simulator
             }
             .keyboardShortcut("2", modifiers: .command)
 
-            Button("Tests") {
-                appState.activeTab = .tests
+            Button("Database") {
+                appState.activeTab = .app
+                appState.activeAppSubTab = .database
             }
             .keyboardShortcut("3", modifiers: .command)
         }

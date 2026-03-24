@@ -20,9 +20,10 @@ enum MCPToolRegistry {
             name: "nav_switch_tab",
             description: "Switch the active sidebar tab",
             properties: [
-                "tab": ["type": "string", "description": "Tab name", "enum": [
-                    "simulator", "database", "tests", "assets",
-                    "ascOverview", "storeListing", "screenshots", "appDetails", "monetization", "review",
+                "tab": ["type": "string", "description": "Tab name. Use 'dashboard' or 'app' for top-level tabs. Legacy names (simulator, database, tests, assets, ascOverview) map to App sub-tabs.", "enum": [
+                    "dashboard", "app",
+                    "simulator", "database", "tests", "assets", "overview", "ascOverview",
+                    "storeListing", "screenshots", "appDetails", "monetization", "review",
                     "analytics", "reviews",
                     "builds", "groups", "betaInfo", "feedback",
                     "settings"
@@ -156,8 +157,9 @@ enum MCPToolRegistry {
             name: "get_tab_state",
             description: "Get the structured data state of any Blitz tab. Returns form field values, submission readiness, versions, builds, localizations, etc. Use this instead of screenshots to read UI state.",
             properties: [
-                "tab": ["type": "string", "description": "Tab to read state from (defaults to currently active tab)", "enum": [
-                    "ascOverview", "storeListing", "screenshots", "appDetails", "monetization", "review",
+                "tab": ["type": "string", "description": "Tab to read state from (defaults to currently active tab). 'app' or 'ascOverview' returns overview/submission readiness.", "enum": [
+                    "app", "ascOverview", "overview",
+                    "storeListing", "screenshots", "appDetails", "monetization", "review",
                     "analytics", "reviews", "builds", "groups", "betaInfo", "feedback"
                 ]]
             ],

@@ -1029,7 +1029,7 @@ final class ASCManager {
         }
 
         switch tab {
-        case .ascOverview:
+        case .app:
             refreshAppIconStatusIfNeeded(for: loadedProjectId)
             let versions = try await service.fetchAppStoreVersions(appId: appId)
             appStoreVersions = versions
@@ -2044,7 +2044,7 @@ final class ASCManager {
             }
             try await service.submitForReview(appId: appId, versionId: versionId)
             isSubmitting = false
-            await refreshTabData(.ascOverview)
+            await refreshTabData(.app)
         } catch {
             isSubmitting = false
             submissionError = error.localizedDescription

@@ -234,7 +234,7 @@ struct SimulatorView: View {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
             // Only capture when simulator is streaming and this tab is active
             guard stream.isCapturing,
-                  appState.activeTab == .simulator,
+                  appState.activeTab == .app && appState.activeAppSubTab == .simulator,
                   !appState.ascManager.showAppleIDLogin,
                   let udid = appState.simulatorManager.bootedDeviceId else {
                 return event

@@ -86,15 +86,9 @@ struct ConnectAIPopover: View {
     /// Tab-specific default prompt, shared with TerminalLauncher.
     static func prompt(for tab: AppTab) -> String? {
         switch tab {
-        case .simulator:
-            return "Build and launch my app on the simulator, then describe what's on screen."
-        case .database:
-            return "Help me set up a database schema and authentication for my app."
-        case .tests:
-            return "Help me write and run tests for my app."
-        case .assets:
-            return "Help me generate and configure app icons and assets."
-        case .ascOverview:
+        case .dashboard:
+            return nil
+        case .app:
             return "Help me complete all the steps needed to submit my app to the App Store."
         case .storeListing:
             return "Help me write a compelling App Store listing — name, subtitle, description, and keywords."

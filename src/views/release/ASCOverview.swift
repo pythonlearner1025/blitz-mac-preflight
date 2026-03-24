@@ -13,7 +13,7 @@ struct ASCOverview: View {
             projectId: appState.activeProjectId ?? "",
             bundleId: appState.activeProject?.metadata.bundleIdentifier
         ) {
-            ASCTabContent(asc: asc, tab: .ascOverview, platform: appState.activeProject?.platform ?? .iOS) {
+            ASCTabContent(asc: asc, tab: .app, platform: appState.activeProject?.platform ?? .iOS) {
                 overviewContent
             }
         }
@@ -22,7 +22,7 @@ struct ASCOverview: View {
                 asc.checkAppIcon(projectId: pid)
                 appIcon = Self.loadAppIcon(projectId: pid)
             }
-            await asc.fetchTabData(.ascOverview)
+            await asc.fetchTabData(.app)
         }
         .sheet(isPresented: $showPreview) {
             SubmitPreviewSheet(appState: appState)
@@ -123,7 +123,7 @@ struct ASCOverview: View {
                             .font(.headline)
 
                         Button {
-                            Task { await asc.refreshTabData(.ascOverview) }
+                            Task { await asc.refreshTabData(.app) }
                         } label: {
                             Image(systemName: "arrow.clockwise")
                         }
