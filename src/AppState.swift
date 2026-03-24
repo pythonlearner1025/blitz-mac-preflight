@@ -393,7 +393,7 @@ final class ProjectSetupManager {
             // (setup recreates the project dir, so these must be written after)
             let storage = ProjectStorage()
             storage.ensureMCPConfig(projectId: projectId)
-            storage.ensureClaudeFiles(projectId: projectId, projectType: projectType)
+            storage.ensureClaudeFiles(projectId: projectId, projectType: projectType, whitelistBlitzMCP: SettingsService.shared.whitelistBlitzMCPTools)
             isSettingUp = false
         } catch {
             errorMessage = error.localizedDescription

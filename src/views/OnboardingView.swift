@@ -111,11 +111,13 @@ struct OnboardingView: View {
     @State private var showCustomPicker = false
     @State private var showExternalTerminals = false
     @State private var skipAgentPermissions: Bool
+    @State private var whitelistBlitzMCPTools: Bool
 
     init(appState: AppState, onComplete: @escaping () -> Void) {
         self.appState = appState
         self.onComplete = onComplete
         _skipAgentPermissions = State(initialValue: appState.settingsStore.skipAgentPermissions)
+        _whitelistBlitzMCPTools = State(initialValue: appState.settingsStore.whitelistBlitzMCPTools)
     }
 
     // ASC setup state
@@ -278,6 +280,19 @@ struct OnboardingView: View {
                     .toggleStyle(.switch)
                     .controlSize(.small)
                 }
+
+                // Whitelist Blitz MCP tools
+                Toggle(isOn: $whitelistBlitzMCPTools) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Allow all Blitz MCP tool calls")
+                            .font(.callout)
+                        Text("AI agents run Blitz tools without asking. Blitz still shows its own approval for destructive actions.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
 
                 Divider()
 
@@ -908,6 +923,7 @@ struct OnboardingView: View {
         settings.defaultTerminal = selectedTerminal.settingsValue
         settings.defaultAgentCLI = selectedAgent.rawValue
         settings.skipAgentPermissions = skipAgentPermissions
+        settings.whitelistBlitzMCPTools = whitelistBlitzMCPTools
         settings.hasCompletedOnboarding = true
         settings.save()
 

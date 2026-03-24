@@ -164,7 +164,7 @@ struct ContentView: View {
                         let storage = ProjectStorage()
                         storage.ensureMCPConfig(projectId: newId)
                         storage.ensureTeenybaseBackend(projectId: newId, projectType: project.type)
-                        storage.ensureClaudeFiles(projectId: newId, projectType: project.type)
+                        storage.ensureClaudeFiles(projectId: newId, projectType: project.type, whitelistBlitzMCP: appState.settingsStore.whitelistBlitzMCPTools)
                     }
                     await startPendingSetupIfNeeded()
                     appState.ascManager.clearForProjectSwitch()

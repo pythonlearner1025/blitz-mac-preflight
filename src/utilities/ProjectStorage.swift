@@ -144,7 +144,7 @@ struct ProjectStorage {
     /// Ensure ~/.blitz/mcps/ has MCP configs, CLAUDE.md, and skills so that
     /// agent sessions launched outside a project (e.g. onboarding ASC setup) can
     /// access Blitz MCP tools. Idempotent — safe to call on every launch.
-    func ensureGlobalMCPConfigs() {
+    func ensureGlobalMCPConfigs(whitelistBlitzMCP: Bool = true) {
         let fm = FileManager.default
         let mcpsDir = BlitzPaths.mcps
 
@@ -157,14 +157,18 @@ struct ProjectStorage {
         let claudeDir = mcpsDir.appendingPathComponent(".claude")
         let settingsFile = claudeDir.appendingPathComponent("settings.local.json")
         try? fm.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        var allowList: [String] = [
+            "mcp__blitz-macos__asc_set_credentials",
+            "mcp__blitz-macos__asc_web_auth",
+            "Bash(python3:*)",
+        ]
+        if whitelistBlitzMCP {
+            allowList = Self.allBlitzMCPToolPermissions()
+        }
         let settings: [String: Any] = [
             "enabledMcpjsonServers": ["blitz-macos", "blitz-iphone"],
             "permissions": [
-                "allow": [
-                    "mcp__blitz-macos__asc_set_credentials",
-                    "mcp__blitz-macos__asc_web_auth",
-                    "Bash(python3:*)",
-                ]
+                "allow": allowList
             ]
         ]
         if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
@@ -278,8 +282,21 @@ struct ProjectStorage {
         }
     }
 
+    /// All Blitz MCP tool permission strings for both blitz-macos and blitz-iphone servers.
+    static func allBlitzMCPToolPermissions() -> [String] {
+        // blitz-macos tools — from MCPToolRegistry
+        let macTools = MCPToolRegistry.allToolNames().map { "mcp__blitz-macos__\($0)" }
+        // blitz-iphone tools — from @blitzdev/iphone-mcp
+        let iphoneTools = [
+            "list_devices", "setup_device", "launch_app", "list_apps",
+            "get_screenshot", "scan_ui", "describe_screen", "device_action",
+            "device_actions", "get_execution_context",
+        ].map { "mcp__blitz-iphone__\($0)" }
+        return macTools + iphoneTools
+    }
+
     /// Ensure CLAUDE.md, .claude/settings.local.json, and .claude/rules/ exist for a project.
-    func ensureClaudeFiles(projectId: String, projectType: ProjectType) {
+    func ensureClaudeFiles(projectId: String, projectType: ProjectType, whitelistBlitzMCP: Bool = true) {
         let fm = FileManager.default
         let projectDir = baseDirectory.appendingPathComponent(projectId)
         let claudeDir = projectDir.appendingPathComponent(".claude")
@@ -299,19 +316,34 @@ struct ProjectStorage {
             if var perms = existing["permissions"] as? [String: Any],
                var allow = perms["allow"] as? [String] {
                 allow.removeAll { $0.contains("blitz-ios") }
+                // Inject whitelist if enabled
+                if whitelistBlitzMCP {
+                    let blitzTools = Self.allBlitzMCPToolPermissions()
+                    for tool in blitzTools where !allow.contains(tool) {
+                        allow.append(tool)
+                    }
+                }
                 perms["allow"] = allow
                 existing["permissions"] = perms
             }
             settings = existing
         } else {
+            var defaultAllow: [String] = [
+                "Bash(curl:*)",
+                "Bash(xcrun simctl terminate:*)",
+                "Bash(xcrun simctl launch:*)",
+                "mcp__blitz-macos__app_get_state",
+            ]
+            if whitelistBlitzMCP {
+                defaultAllow = Self.allBlitzMCPToolPermissions() + [
+                    "Bash(curl:*)",
+                    "Bash(xcrun simctl terminate:*)",
+                    "Bash(xcrun simctl launch:*)",
+                ]
+            }
             settings = [
                 "permissions": [
-                    "allow": [
-                        "Bash(curl:*)",
-                        "Bash(xcrun simctl terminate:*)",
-                        "Bash(xcrun simctl launch:*)",
-                        "mcp__blitz-macos__app_get_state",
-                    ]
+                    "allow": defaultAllow
                 ],
                 "enabledMcpjsonServers": correctServers,
             ]

@@ -32,6 +32,7 @@ final class SettingsService {
     var defaultAgentCLI: String = AIAgent.claudeCode.rawValue
     var sendDefaultPrompt: Bool = true
     var skipAgentPermissions: Bool = false
+    var whitelistBlitzMCPTools: Bool = true
     var terminalPosition: String = "bottom"  // "bottom" or "right"
 
     init() {
@@ -53,6 +54,7 @@ final class SettingsService {
         if let agent = json["defaultAgentCLI"] as? String { defaultAgentCLI = agent }
         if let sendPrompt = json["sendDefaultPrompt"] as? Bool { sendDefaultPrompt = sendPrompt }
         if let skipPerms = json["skipAgentPermissions"] as? Bool { skipAgentPermissions = skipPerms }
+        if let whitelist = json["whitelistBlitzMCPTools"] as? Bool { whitelistBlitzMCPTools = whitelist }
         if let termPos = json["terminalPosition"] as? String { terminalPosition = termPos }
     }
 
@@ -66,6 +68,7 @@ final class SettingsService {
             "defaultAgentCLI": defaultAgentCLI,
             "sendDefaultPrompt": sendDefaultPrompt,
             "skipAgentPermissions": skipAgentPermissions,
+            "whitelistBlitzMCPTools": whitelistBlitzMCPTools,
             "terminalPosition": terminalPosition,
         ]
         if let udid = defaultSimulatorUDID {

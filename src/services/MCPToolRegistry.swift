@@ -372,6 +372,11 @@ enum MCPToolRegistry {
 
     // MARK: - Helper
 
+    /// Returns all tool names registered in the registry.
+    static func allToolNames() -> [String] {
+        allTools().compactMap { $0["name"] as? String }
+    }
+
     private static func tool(
         name: String,
         description: String,

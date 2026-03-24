@@ -168,7 +168,7 @@ struct ImportProjectSheet: View {
             let projectId = try storage.openProject(at: url)
             storage.ensureMCPConfig(projectId: projectId)
             storage.ensureTeenybaseBackend(projectId: projectId, projectType: projectType)
-            storage.ensureClaudeFiles(projectId: projectId, projectType: projectType)
+            storage.ensureClaudeFiles(projectId: projectId, projectType: projectType, whitelistBlitzMCP: appState.settingsStore.whitelistBlitzMCPTools)
             await appState.projectManager.loadProjects()
             appState.activeProjectId = projectId
             isPresented = false

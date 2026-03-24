@@ -234,6 +234,15 @@ struct SettingsView: View {
                 .fixedSize()
             }
 
+            // Whitelist Blitz MCP tools
+            Toggle("Allow all Blitz MCP tool calls", isOn: Binding(
+                get: { settings.whitelistBlitzMCPTools },
+                set: { newValue in
+                    settings.whitelistBlitzMCPTools = newValue
+                    settings.save()
+                }
+            ))
+
             // Send default prompt toggle
             VStack(alignment: .leading, spacing: 4) {
                 Toggle("Send tab-specific prompt on launch", isOn: Binding(
