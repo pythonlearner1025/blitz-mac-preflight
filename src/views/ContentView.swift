@@ -52,26 +52,16 @@ struct ContentView: View {
             SidebarView(appState: appState)
                 .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 250)
         } detail: {
-            if appState.settingsStore.terminalPosition == "right" {
-                HSplitView {
-                    DetailView(appState: appState)
-                        .frame(minWidth: 300)
-
-                    if appState.showTerminal {
-                        TerminalPanelView(appState: appState)
-                            .frame(minWidth: 250, idealWidth: 400)
-                    }
-                }
-            } else {
-                VSplitView {
-                    DetailView(appState: appState)
-                        .frame(minHeight: 200)
-
-                    if appState.showTerminal {
-                        TerminalPanelView(appState: appState)
-                            .frame(minHeight: 120, idealHeight: 250)
-                    }
-                }
+            TerminalSplitView(
+                isHorizontal: appState.settingsStore.terminalPosition == "right",
+                showPanel: appState.showTerminal,
+                panelSize: $appState.terminalPanelSize,
+                minPanelSize: 120,
+                minContentSize: 200
+            ) {
+                DetailView(appState: appState)
+            } panel: {
+                TerminalPanelView(appState: appState)
             }
         }
         .navigationSplitViewStyle(.balanced)

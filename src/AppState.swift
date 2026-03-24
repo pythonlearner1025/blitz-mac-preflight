@@ -145,6 +145,7 @@ var settingsStore = SettingsService.shared
 
     // Terminal panel visibility (toggle only — does not affect session lifecycle)
     var showTerminal = false
+    var terminalPanelSize: CGFloat = 250
 
     // Sheet control (toggled by menu bar, observed by ContentView)
     var showNewProjectSheet = false

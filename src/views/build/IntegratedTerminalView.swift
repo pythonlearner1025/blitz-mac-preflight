@@ -24,8 +24,10 @@ struct TerminalSessionView: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: ()) {
-        // Detach terminal view from container — the view itself lives on in TerminalSession
-        nsView.subviews.forEach { $0.removeFromSuperview() }
+        // Do NOT remove the terminal view here. It is managed by TerminalSession
+        // and will be re-embedded by makeNSView when the view hierarchy is rebuilt
+        // (e.g. switching split position). Removing it here causes the terminal's
+        // rendering context to be lost, resulting in a blank view.
     }
 
     private func embed(_ termView: LocalProcessTerminalView, in container: NSView) {
@@ -38,5 +40,8 @@ struct TerminalSessionView: NSViewRepresentable {
             termView.topAnchor.constraint(equalTo: container.topAnchor),
             termView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
+        // Force a full redraw after re-embedding to restore rendering state
+        termView.needsLayout = true
+        termView.needsDisplay = true
     }
 }
