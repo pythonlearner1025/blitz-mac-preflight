@@ -25,6 +25,14 @@ struct ContentView: View {
     @State private var tabSwitchTask: Task<Void, Never>?
     @State private var showConnectAI = false
 
+    private var terminalSplitMinContentSize: CGFloat {
+        let baseMinContentSize: CGFloat = 200
+        guard appState.settingsStore.terminalPosition == "right" else {
+            return baseMinContentSize
+        }
+        return max(baseMinContentSize, AppTabView.minimumSingleLineWidth)
+    }
+
     private var appleIDLoginBinding: Binding<Bool> {
         Binding(
             get: { appState.ascManager.showAppleIDLogin },
@@ -33,6 +41,41 @@ struct ContentView: View {
     }
 
     /// Consume pendingSetupProjectId and run project scaffolding if needed.
+    private func launchTerminal() {
+        let settings = appState.settingsStore
+        let terminal = settings.resolveDefaultTerminal().terminal
+
+        if terminal.isBuiltIn {
+            // Show built-in terminal panel
+            appState.showTerminal = true
+
+            // Create a new session with the AI agent command
+            let session = appState.terminalManager.createSession(projectPath: appState.activeProject?.path)
+
+            // Build and send the agent CLI command
+            let agent = AIAgent(rawValue: settings.defaultAgentCLI) ?? .claudeCode
+            var command = agent.cliCommand
+            if settings.skipAgentPermissions, let flag = agent.skipPermissionsFlag {
+                command += " \(flag)"
+            }
+            if settings.sendDefaultPrompt, let prompt = ConnectAIPopover.prompt(for: appState.activeTab) {
+                let escaped = prompt.replacingOccurrences(of: "'", with: "'\\''")
+                command += " '\(escaped)'"
+            }
+
+            // Small delay so the shell is ready to receive input
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                session.sendCommand(command)
+            }
+        } else {
+            // Launch external terminal
+            TerminalLauncher.launchFromSettings(
+                projectPath: appState.activeProject?.path,
+                activeTab: appState.activeTab
+            )
+        }
+    }
+
     private func startPendingSetupIfNeeded() async {
         guard let pendingId = appState.projectSetup.pendingSetupProjectId,
               pendingId == appState.activeProjectId,
@@ -57,7 +100,7 @@ struct ContentView: View {
                 showPanel: appState.showTerminal,
                 panelSize: $appState.terminalPanelSize,
                 minPanelSize: 120,
-                minContentSize: 200
+                minContentSize: terminalSplitMinContentSize
             ) {
                 DetailView(appState: appState)
             } panel: {
@@ -67,40 +110,12 @@ struct ContentView: View {
         .navigationSplitViewStyle(.balanced)
         .toolbar {
             ToolbarItem(placement: .navigation) {
-                Button(action: {
-                    // Try to auto-launch terminal with agent CLI
-                    let launched = TerminalLauncher.launchFromSettings(
-                        projectPath: appState.activeProject?.path,
-                        activeTab: appState.activeTab
-                    )
-                    if !launched {
-                        // Fallback: show the popover
-                        showConnectAI = true
-                    }
-                }) {
-                    Label("Connect AI", systemImage: "sparkles")
-                }
-                .help("Connect AI agent")
-                .popover(isPresented: $showConnectAI, arrowEdge: .bottom) {
-                    ConnectAIPopover(projectPath: appState.activeProject?.path, activeTab: appState.activeTab)
-                }
-                .contextMenu {
-                    Button("Show Connect AI Panel") {
-                        showConnectAI = true
-                    }
-                }
-            }
-            ToolbarItem(placement: .navigation) {
                 Button {
-                    appState.showTerminal.toggle()
-                    // Auto-create first session when opening the panel
-                    if appState.showTerminal && appState.terminalManager.sessions.isEmpty {
-                        appState.terminalManager.createSession(projectPath: appState.activeProject?.path)
-                    }
+                    launchTerminal()
                 } label: {
                     Label("Terminal", systemImage: "terminal")
                 }
-                .help(appState.showTerminal ? "Hide terminal" : "Show terminal")
+                .help("Launch terminal with AI agent")
             }
         }
         .background(HostingWindowFinder { window in

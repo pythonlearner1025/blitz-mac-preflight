@@ -12,15 +12,21 @@ struct TerminalSplitView<Content: View, Panel: View>: View {
     @ViewBuilder let content: () -> Content
     @ViewBuilder let panel: () -> Panel
 
-    @GestureState private var dragOffset: CGFloat = 0
+    @State private var dragStartPanelSize: CGFloat?
+    @State private var isHoveringDivider = false
+    @State private var isDraggingDivider = false
+
+    private let dividerThickness: CGFloat = 1
+    private let grabAreaThickness: CGFloat = 20
 
     var body: some View {
         GeometryReader { geo in
-            let total = isHorizontal ? geo.size.width : geo.size.height
-            let raw = showPanel ? panelSize + dragOffset : 0
-            let clamped = max(minPanelSize, min(raw, total - minContentSize))
-            let divider: CGFloat = showPanel ? 1 : 0
-            let contentSize = showPanel ? total - clamped - divider : total
+            let total = axisLength(in: geo.size)
+            let visibleDividerThickness = showPanel ? dividerThickness : 0
+            let clampedPanelSize = showPanel ? clampedPanelSize(panelSize, total: total) : 0
+            let contentSize = max(total - clampedPanelSize - visibleDividerThickness, 0)
+            let dividerOffset = contentSize
+            let panelOffset = contentSize + visibleDividerThickness
 
             // Always the same ZStack → stable view identity for both children
             ZStack(alignment: .topLeading) {
@@ -28,64 +34,146 @@ struct TerminalSplitView<Content: View, Panel: View>: View {
                 content()
                     .frame(
                         width: isHorizontal ? contentSize : geo.size.width,
-                        height: isHorizontal ? geo.size.height : contentSize
+                        height: isHorizontal ? geo.size.height : contentSize,
+                        alignment: .topLeading
                     )
 
-                if showPanel {
-                    // Divider + Panel group
-                    ZStack(alignment: .topLeading) {
-                        // Divider line
-                        Rectangle()
-                            .fill(Color(nsColor: .separatorColor))
-                            .frame(
-                                width: isHorizontal ? 1 : geo.size.width,
-                                height: isHorizontal ? geo.size.height : 1
-                            )
-
-                        // Drag hit area (invisible, wider than the 1px line)
-                        Color.clear
-                            .frame(
-                                width: isHorizontal ? 9 : geo.size.width,
-                                height: isHorizontal ? geo.size.height : 9
-                            )
-                            .offset(x: isHorizontal ? -4 : 0, y: isHorizontal ? 0 : -4)
-                            .contentShape(Rectangle())
-                            .cursor(isHorizontal ? .resizeLeftRight : .resizeUpDown)
-                            .gesture(
-                                DragGesture(minimumDistance: 1)
-                                    .updating($dragOffset) { value, state, _ in
-                                        state = isHorizontal ? -value.translation.width : -value.translation.height
-                                    }
-                                    .onEnded { value in
-                                        let delta = isHorizontal ? -value.translation.width : -value.translation.height
-                                        panelSize = max(minPanelSize, min(panelSize + delta, total - minContentSize))
-                                    }
-                            )
-
-                        // Panel
-                        panel()
-                            .frame(
-                                width: isHorizontal ? clamped : geo.size.width,
-                                height: isHorizontal ? geo.size.height : clamped
-                            )
-                            .offset(x: isHorizontal ? divider : 0, y: isHorizontal ? 0 : divider)
-                    }
+                // Panel — stays in the hierarchy even when hidden so orientation flips do not
+                // recreate the underlying NSView subtree.
+                panel()
+                    .frame(
+                        width: isHorizontal ? clampedPanelSize : geo.size.width,
+                        height: isHorizontal ? geo.size.height : clampedPanelSize,
+                        alignment: .topLeading
+                    )
                     .offset(
-                        x: isHorizontal ? contentSize : 0,
-                        y: isHorizontal ? 0 : contentSize
+                        x: isHorizontal ? panelOffset : 0,
+                        y: isHorizontal ? 0 : panelOffset
                     )
-                }
+                    .opacity(showPanel ? 1 : 0)
+                    .allowsHitTesting(showPanel)
+
+                // Visible divider line
+                Rectangle()
+                    .fill(dividerColor)
+                    .frame(
+                        width: isHorizontal ? visibleDividerThickness : geo.size.width,
+                        height: isHorizontal ? geo.size.height : visibleDividerThickness
+                    )
+                    .offset(
+                        x: isHorizontal ? dividerOffset : 0,
+                        y: isHorizontal ? 0 : dividerOffset
+                    )
+                    .opacity(showPanel ? 1 : 0)
+                    .allowsHitTesting(false)
+                    .animation(.easeInOut(duration: 0.15), value: isHoveringDivider)
+                    .animation(.easeInOut(duration: 0.15), value: isDraggingDivider)
+
+                dividerHandle(in: geo.size, dividerOffset: dividerOffset, total: total)
+                    .opacity(showPanel ? 1 : 0)
+                    .allowsHitTesting(showPanel)
+                    .zIndex(1)
+            }
+            .onDisappear {
+                dragStartPanelSize = nil
+                isDraggingDivider = false
+                isHoveringDivider = false
             }
         }
+    }
+
+    private var dividerColor: Color {
+        if isHoveringDivider || isDraggingDivider {
+            return Color.accentColor.opacity(0.6)
+        }
+        return Color(nsColor: .separatorColor)
+    }
+
+    private func dividerHandle(in size: CGSize, dividerOffset: CGFloat, total: CGFloat) -> some View {
+        // Use a nearly transparent fill instead of Color.clear so AppKit always has a reliable
+        // hit-testable surface above the embedded terminal NSView.
+        Rectangle()
+            .fill(Color.black.opacity(0.001))
+            .contentShape(Rectangle())
+            .frame(
+                width: isHorizontal ? grabAreaThickness : size.width,
+                height: isHorizontal ? size.height : grabAreaThickness
+            )
+            .offset(
+                x: isHorizontal ? dividerOffset - ((grabAreaThickness - dividerThickness) / 2) : 0,
+                y: isHorizontal ? 0 : dividerOffset - ((grabAreaThickness - dividerThickness) / 2)
+            )
+            .resizeCursor(isHorizontal ? .resizeLeftRight : .resizeUpDown, isHovering: $isHoveringDivider)
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let startSize = dragStartPanelSize ?? clampedPanelSize(panelSize, total: total)
+                        dragStartPanelSize = startSize
+                        isDraggingDivider = true
+                        panelSize = clampedPanelSize(startSize + dragDelta(for: value), total: total)
+                    }
+                    .onEnded { value in
+                        let startSize = dragStartPanelSize ?? clampedPanelSize(panelSize, total: total)
+                        panelSize = clampedPanelSize(startSize + dragDelta(for: value), total: total)
+                        dragStartPanelSize = nil
+                        isDraggingDivider = false
+                    }
+            )
+    }
+
+    private func axisLength(in size: CGSize) -> CGFloat {
+        isHorizontal ? size.width : size.height
+    }
+
+    private func dragDelta(for value: DragGesture.Value) -> CGFloat {
+        isHorizontal ? -value.translation.width : -value.translation.height
+    }
+
+    private func clampedPanelSize(_ proposed: CGFloat, total: CGFloat) -> CGFloat {
+        let maxPanelSize = max(total - minContentSize, 0)
+        let minAllowedPanelSize = min(minPanelSize, maxPanelSize)
+        return min(max(proposed, minAllowedPanelSize), maxPanelSize)
     }
 }
 
 // MARK: - Cursor
 
 private extension View {
-    func cursor(_ cursor: NSCursor) -> some View {
-        onHover { inside in
-            if inside { cursor.push() } else { NSCursor.pop() }
-        }
+    func resizeCursor(_ cursor: NSCursor, isHovering: Binding<Bool>) -> some View {
+        modifier(ResizeCursorModifier(cursor: cursor, isHovering: isHovering))
+    }
+}
+
+private struct ResizeCursorModifier: ViewModifier {
+    let cursor: NSCursor
+    @Binding var isHovering: Bool
+
+    @State private var hasPushedCursor = false
+
+    func body(content: Content) -> some View {
+        content
+            .onContinuousHover { phase in
+                switch phase {
+                case .active:
+                    isHovering = true
+                    if !hasPushedCursor {
+                        cursor.push()
+                        hasPushedCursor = true
+                    }
+                case .ended:
+                    isHovering = false
+                    if hasPushedCursor {
+                        NSCursor.pop()
+                        hasPushedCursor = false
+                    }
+                }
+            }
+            .onDisappear {
+                isHovering = false
+                if hasPushedCursor {
+                    NSCursor.pop()
+                    hasPushedCursor = false
+                }
+            }
     }
 }

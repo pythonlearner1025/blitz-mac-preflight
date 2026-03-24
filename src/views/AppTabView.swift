@@ -3,6 +3,24 @@ import SwiftUI
 struct AppTabView: View {
     @Bindable var appState: AppState
 
+    /// Minimum width needed to keep every App sub-tab button on a single line.
+    static let minimumSingleLineWidth: CGFloat = {
+        let textFont = NSFont.systemFont(ofSize: 12, weight: .medium)
+        let symbolAllowance: CGFloat = 14
+        let buttonInnerSpacing: CGFloat = 4
+        let buttonHorizontalPadding: CGFloat = 20
+        let interButtonSpacing: CGFloat = 2 * CGFloat(max(AppSubTab.allCases.count - 1, 0))
+        let navbarHorizontalPadding: CGFloat = 32
+        let safetyMargin: CGFloat = 24
+
+        let totalButtonWidth = AppSubTab.allCases.reduce(CGFloat.zero) { partial, tab in
+            let textWidth = ceil((tab.label as NSString).size(withAttributes: [.font: textFont]).width)
+            return partial + textWidth + symbolAllowance + buttonInnerSpacing + buttonHorizontalPadding
+        }
+
+        return totalButtonWidth + interButtonSpacing + navbarHorizontalPadding + safetyMargin
+    }()
+
     var body: some View {
         VStack(spacing: 0) {
             // Top navbar
@@ -32,7 +50,9 @@ struct AppTabView: View {
                             .font(.system(size: 11))
                         Text(tab.label)
                             .font(.system(size: 12, weight: .medium))
+                            .lineLimit(1)
                     }
+                    .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
                     .background(
