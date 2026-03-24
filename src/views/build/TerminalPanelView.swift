@@ -110,9 +110,7 @@ struct TerminalPanelView: View {
 
     @ViewBuilder
     private var terminalContent: some View {
-        if let session = manager.activeSession {
-            TerminalSessionView(session: session)
-        } else {
+        if manager.sessions.isEmpty {
             VStack(spacing: 8) {
                 Text("No terminal sessions")
                     .font(.callout)
@@ -122,6 +120,20 @@ struct TerminalPanelView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ZStack {
+                // Keep each session's host NSView alive so switching tabs does not require
+                // SwiftUI to reparent a single LocalProcessTerminalView between containers.
+                ForEach(manager.sessions) { session in
+                    let isActive = session.id == manager.activeSessionId
+
+                    TerminalSessionView(session: session, isActive: isActive)
+                        .opacity(isActive ? 1 : 0)
+                        .allowsHitTesting(isActive)
+                        .zIndex(isActive ? 1 : 0)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }

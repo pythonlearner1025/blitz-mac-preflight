@@ -6,6 +6,7 @@ import SwiftTerm
 /// across show/hide cycles and tab switches.
 struct TerminalSessionView: NSViewRepresentable {
     let session: TerminalSession
+    let isActive: Bool
 
     func makeNSView(context: Context) -> NSView {
         let container = NSView(frame: .zero)
@@ -20,6 +21,18 @@ struct TerminalSessionView: NSViewRepresentable {
         if termView.superview !== nsView {
             nsView.subviews.forEach { $0.removeFromSuperview() }
             embed(termView, in: nsView)
+        }
+
+        guard isActive else { return }
+
+        termView.needsLayout = true
+        termView.needsDisplay = true
+        termView.displayIfNeeded()
+
+        if nsView.window?.firstResponder !== termView {
+            DispatchQueue.main.async {
+                nsView.window?.makeFirstResponder(termView)
+            }
         }
     }
 
