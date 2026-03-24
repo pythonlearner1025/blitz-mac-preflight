@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 /// Terminal app options for onboarding configuration
 enum TerminalApp: Hashable {
+    case builtIn
     case terminal
     case ghostty
     case iterm
@@ -12,6 +13,7 @@ enum TerminalApp: Hashable {
 
     var id: String {
         switch self {
+        case .builtIn: return "builtIn"
         case .terminal: return "terminal"
         case .ghostty: return "ghostty"
         case .iterm: return "iterm"
@@ -21,16 +23,19 @@ enum TerminalApp: Hashable {
 
     var displayName: String {
         switch self {
-        case .terminal: return "Terminal"
-        case .ghostty: return "Ghostty"
-        case .iterm: return "iTerm"
+        case .builtIn: return "Terminal (built-in)"
+        case .terminal: return "Terminal (external)"
+        case .ghostty: return "Ghostty (external)"
+        case .iterm: return "iTerm (external)"
         case .custom(let path):
-            return URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+            let name = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+            return "\(name) (external)"
         }
     }
 
     var iconName: String {
         switch self {
+        case .builtIn: return "terminal"
         case .terminal: return "terminal"
         case .ghostty: return "terminal"
         case .iterm: return "terminal"
@@ -40,6 +45,7 @@ enum TerminalApp: Hashable {
 
     var bundleIdentifier: String {
         switch self {
+        case .builtIn: return ""
         case .terminal: return "com.apple.Terminal"
         case .ghostty: return "com.mitchellh.ghostty"
         case .iterm: return "com.googlecode.iterm2"
@@ -47,8 +53,14 @@ enum TerminalApp: Hashable {
         }
     }
 
+    var isBuiltIn: Bool {
+        if case .builtIn = self { return true }
+        return false
+    }
+
     var isAvailable: Bool {
         switch self {
+        case .builtIn: return true
         case .custom(let path):
             return FileManager.default.fileExists(atPath: path)
         default:
@@ -56,9 +68,9 @@ enum TerminalApp: Hashable {
         }
     }
 
-    /// Missing saved terminals fall back to Terminal so launches still work.
+    /// Missing saved terminals fall back to built-in so launches still work.
     var resolvedFallback: TerminalApp {
-        isAvailable ? self : .terminal
+        isAvailable ? self : .builtIn
     }
 
     /// Persist to settings as a string
@@ -67,6 +79,7 @@ enum TerminalApp: Hashable {
     /// Restore from settings string
     static func from(_ value: String) -> TerminalApp {
         switch value {
+        case "builtIn": return .builtIn
         case "terminal": return .terminal
         case "ghostty": return .ghostty
         case "iterm": return .iterm
@@ -80,7 +93,7 @@ struct OnboardingView: View {
     var onComplete: () -> Void
 
     @State private var currentStep = 0
-    @State private var selectedTerminal: TerminalApp = .terminal
+    @State private var selectedTerminal: TerminalApp = .builtIn
     @State private var selectedAgent: AIAgent = .claudeCode
     @State private var detectedTerminals: [TerminalApp] = []
     @State private var showCustomPicker = false
@@ -332,7 +345,11 @@ struct OnboardingView: View {
 
     @ViewBuilder
     private func terminalIcon(for terminal: TerminalApp) -> some View {
-        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminal.bundleIdentifier) {
+        if terminal.isBuiltIn {
+            Image(systemName: "terminal.fill")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+        } else if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminal.bundleIdentifier) {
             let icon = NSWorkspace.shared.icon(forFile: appURL.path)
             Image(nsImage: icon)
                 .resizable()
@@ -799,10 +816,10 @@ struct OnboardingView: View {
     // MARK: - Logic
 
     private func detectTerminals() -> [TerminalApp] {
-        var found: [TerminalApp] = []
+        var found: [TerminalApp] = [.builtIn]
         let ws = NSWorkspace.shared
 
-        // Always include macOS Terminal
+        // macOS Terminal
         if ws.urlForApplication(withBundleIdentifier: "com.apple.Terminal") != nil {
             found.append(.terminal)
         }

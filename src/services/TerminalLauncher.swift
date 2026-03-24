@@ -29,6 +29,8 @@ enum TerminalLauncher {
         }
 
         switch terminal.resolvedFallback {
+        case .builtIn:
+            return false // Handled by ContentView directly
         case .terminal:
             return launchTerminalApp(command: shellCommand)
         case .ghostty:
@@ -176,7 +178,7 @@ enum TerminalLauncher {
     /// Ghostty uses direct process execution and doesn't need it.
     static func needsAutomationPermission(_ terminal: TerminalApp) -> Bool {
         switch terminal {
-        case .ghostty: return false
+        case .builtIn, .ghostty: return false
         default: return true
         }
     }

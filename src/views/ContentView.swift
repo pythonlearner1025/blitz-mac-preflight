@@ -23,7 +23,6 @@ struct ContentView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var mainWindow: NSWindow?
     @State private var tabSwitchTask: Task<Void, Never>?
-    @State private var showConnectAI = false
 
     private var terminalSplitMinContentSize: CGFloat {
         let baseMinContentSize: CGFloat = 200

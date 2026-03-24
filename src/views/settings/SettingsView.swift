@@ -163,6 +163,10 @@ struct SettingsView: View {
                 Text("Terminal")
                 Spacer()
                 Menu {
+                    terminalMenuItem(.builtIn)
+
+                    Divider()
+
                     terminalMenuItem(.terminal)
 
                     if NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.mitchellh.ghostty") != nil {
@@ -307,7 +311,10 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func terminalAppIcon(_ terminal: TerminalApp, size: CGFloat) -> some View {
-        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminal.bundleIdentifier) {
+        if terminal.isBuiltIn {
+            Image(systemName: "terminal.fill")
+                .frame(width: size, height: size)
+        } else if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminal.bundleIdentifier) {
             let icon = Self.resizedIcon(NSWorkspace.shared.icon(forFile: appURL.path), size: size)
             Image(nsImage: icon)
         } else if case .custom(let path) = terminal {

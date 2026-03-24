@@ -28,7 +28,7 @@ final class SettingsService {
 
     // Onboarding
     var hasCompletedOnboarding: Bool = false
-    var defaultTerminal: String = "terminal"   // "terminal", "ghostty", "iterm", or custom path
+    var defaultTerminal: String = "builtIn"   // "builtIn", "terminal", "ghostty", "iterm", or custom path
     var defaultAgentCLI: String = AIAgent.claudeCode.rawValue
     var sendDefaultPrompt: Bool = true
     var skipAgentPermissions: Bool = false

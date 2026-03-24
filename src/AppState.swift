@@ -635,6 +635,13 @@ final class TerminalSession: Identifiable {
     func markTerminated() {
         isTerminated = true
     }
+
+    /// Send a command string to the shell (types it and presses Enter).
+    func sendCommand(_ command: String) {
+        guard !isTerminated else { return }
+        let data = Array((command + "\n").utf8)
+        terminalView.send(source: terminalView, data: data[...])
+    }
 }
 
 /// Bridges SwiftTerm delegate callbacks to closures for TerminalSession.
