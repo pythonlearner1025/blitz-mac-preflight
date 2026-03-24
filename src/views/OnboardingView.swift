@@ -678,9 +678,18 @@ struct OnboardingView: View {
         }
     }
 
+    /// Resolve the terminal for onboarding context where the built-in split pane
+    /// is unavailable due to the small window size.
+    private var onboardingTerminal: TerminalApp {
+        let resolved = selectedTerminal.resolvedFallback
+        guard resolved.isBuiltIn else { return resolved }
+        // Built-in can't render in the onboarding window — fall back to Terminal.app
+        return .terminal
+    }
+
     private func launchASCSetupWithAI() {
         let agent = selectedAgent
-        let terminal = selectedTerminal.resolvedFallback
+        let terminal = onboardingTerminal
         let prompt = "Use the /asc-team-key-create skill to create a new App Store Connect API key, then call the asc_set_credentials MCP tool to fill the form so I can verify and save."
         TerminalLauncher.launch(
             projectPath: BlitzPaths.mcps.path,
@@ -713,7 +722,7 @@ struct OnboardingView: View {
         VStack(spacing: 6) {
             slideHeader(
                 title: "Ask AI from Any Tab",
-                subtitle: "Click \"Ask AI\" to launch \(selectedAgent.displayName) in \(selectedTerminal.displayName)."
+                subtitle: "Click \"Ask AI\" to launch \(selectedAgent.displayName) in \(selectedTerminal.isBuiltIn ? "the built-in terminal" : selectedTerminal.displayName)."
             )
 
             // Demo video — transparent background, aspect fit
