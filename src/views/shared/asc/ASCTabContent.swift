@@ -7,8 +7,16 @@ struct ASCTabContent<Content: View>: View {
     var platform: ProjectPlatform = .iOS
     @ViewBuilder var content: () -> Content
 
+    private var isLoading: Bool {
+        asc.isLoadingTab[tab] == true || asc.isLoadingApp
+    }
+
+    private var shouldRenderOverviewWhileLoading: Bool {
+        tab == .app && asc.credentials != nil
+    }
+
     var body: some View {
-        if asc.isLoadingTab[tab] == true || asc.isLoadingApp {
+        if isLoading && !shouldRenderOverviewWhileLoading {
             VStack(spacing: 12) {
                 ProgressView()
                 Text("Loading\u{2026}")
@@ -16,7 +24,7 @@ struct ASCTabContent<Content: View>: View {
                     .font(.callout)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if asc.app == nil && asc.credentials != nil {
+        } else if asc.app == nil && asc.credentials != nil && !isLoading {
             // App not found — show bundle ID setup instead of flashing content
             BundleIDSetupView(asc: asc, tab: tab, platform: platform)
         } else if let error = asc.tabError[tab] {
@@ -39,6 +47,16 @@ struct ASCTabContent<Content: View>: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             content()
+                .overlay(alignment: .topTrailing) {
+                    if isLoading && shouldRenderOverviewWhileLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(.background.secondary, in: Capsule())
+                            .padding(12)
+                    }
+                }
         }
     }
 }

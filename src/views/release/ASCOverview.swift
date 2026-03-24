@@ -5,7 +5,6 @@ struct ASCOverview: View {
 
     private var asc: ASCManager { appState.ascManager }
     @State private var showPreview = false
-    @State private var appIcon: NSImage?
 
     var body: some View {
         ASCCredentialGate(
@@ -18,11 +17,7 @@ struct ASCOverview: View {
             }
         }
         .task(id: appState.activeProjectId) {
-            if let pid = appState.activeProjectId {
-                asc.checkAppIcon(projectId: pid)
-                appIcon = Self.loadAppIcon(projectId: pid)
-            }
-            await asc.fetchTabData(.app)
+            await asc.ensureTabData(.app)
         }
         .sheet(isPresented: $showPreview) {
             SubmitPreviewSheet(appState: appState)
@@ -41,12 +36,13 @@ struct ASCOverview: View {
             VStack(alignment: .leading, spacing: 12) {
                 if let app = asc.app {
                     HStack(spacing: 10) {
-                        if let icon = appIcon {
-                            Image(nsImage: icon)
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .frame(width: 40, height: 40)
-                                .clipShape(RoundedRectangle(cornerRadius: 9))
+                        if let project = appState.activeProject {
+                            ProjectAppIconView(project: project, size: 40, cornerRadius: 9) {
+                                Image(systemName: "app.fill")
+                                    .font(.system(size: 30))
+                                    .foregroundStyle(.blue)
+                                    .frame(width: 40, height: 40)
+                            }
                         } else {
                             Image(systemName: "app.fill")
                                 .font(.system(size: 30))
@@ -156,6 +152,12 @@ struct ASCOverview: View {
                                     Text(field.label)
                                         .font(.callout)
                                         .foregroundStyle(.orange)
+                                } else if field.isLoading {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text(field.label)
+                                        .font(.callout)
+                                        .foregroundStyle(.secondary)
                                 } else if field.required && (field.value == nil || field.value!.isEmpty) {
                                     Image(systemName: "exclamationmark.circle.fill")
                                         .foregroundStyle(.red)
@@ -194,6 +196,10 @@ struct ASCOverview: View {
                                                 .frame(maxWidth: 200, alignment: .trailing)
                                         }
                                     }
+                                } else if field.isLoading {
+                                    Text("Loading…")
+                                        .font(.callout)
+                                        .foregroundStyle(.secondary)
                                 } else if let url = field.actionUrl, let nsUrl = URL(string: url) {
                                     if field.label != "Privacy Nutrition Labels" {
                                         Button {
@@ -387,30 +393,5 @@ struct ASCOverview: View {
         case .removed:
             return ("Removed", .secondary)
         }
-    }
-
-
-    private static func loadAppIcon(projectId: String) -> NSImage? {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let blitzPath = "\(home)/.blitz/projects/\(projectId)/assets/AppIcon/icon_1024.png"
-        if let image = NSImage(contentsOfFile: blitzPath) { return image }
-
-        let projectDir = "\(home)/.blitz/projects/\(projectId)"
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(atPath: projectDir) else { return nil }
-        while let file = enumerator.nextObject() as? String {
-            guard file.hasSuffix("AppIcon.appiconset/Contents.json") else { continue }
-            let contentsPath = "\(projectDir)/\(file)"
-            guard let data = fm.contents(atPath: contentsPath),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let images = json["images"] as? [[String: Any]] else { continue }
-            for entry in images {
-                if let filename = entry["filename"] as? String {
-                    let iconDir = (contentsPath as NSString).deletingLastPathComponent
-                    if let image = NSImage(contentsOfFile: "\(iconDir)/\(filename)") { return image }
-                }
-            }
-        }
-        return nil
     }
 }

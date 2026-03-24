@@ -28,6 +28,148 @@ struct LocalScreenshotAsset: Identifiable {
 @MainActor
 @Observable
 final class ASCManager {
+    private struct OverviewSnapshot {
+        let projectId: String
+        let app: ASCApp?
+        let appStoreVersions: [ASCAppStoreVersion]
+        let localizations: [ASCVersionLocalization]
+        let screenshotSets: [ASCScreenshotSet]
+        let screenshots: [String: [ASCScreenshot]]
+        let builds: [ASCBuild]
+        let inAppPurchases: [ASCInAppPurchase]
+        let subscriptionGroups: [ASCSubscriptionGroup]
+        let subscriptionsPerGroup: [String: [ASCSubscription]]
+        let currentAppPricePointId: String?
+        let scheduledAppPricePointId: String?
+        let scheduledAppPriceEffectiveDate: String?
+        let appInfo: ASCAppInfo?
+        let appInfoLocalization: ASCAppInfoLocalization?
+        let ageRatingDeclaration: ASCAgeRatingDeclaration?
+        let reviewDetail: ASCReviewDetail?
+        let reviewSubmissions: [ASCReviewSubmission]
+        let reviewSubmissionItemsBySubmissionId: [String: [ASCReviewSubmissionItem]]
+        let latestSubmissionItems: [ASCReviewSubmissionItem]
+        let submissionHistoryEvents: [ASCSubmissionHistoryEvent]
+        let attachedSubmissionItemIDs: Set<String>
+        let resolutionCenterThreads: [IrisResolutionCenterThread]
+        let rejectionMessages: [IrisResolutionCenterMessage]
+        let rejectionReasons: [IrisReviewRejection]
+        let cachedFeedback: IrisFeedbackCache?
+        let appIconStatus: String?
+        let monetizationStatus: String?
+        let loadedTabs: Set<AppTab>
+        let tabLoadedAt: [AppTab: Date]
+
+        @MainActor
+        init(manager: ASCManager, projectId: String) {
+            self.projectId = projectId
+            app = manager.app
+            appStoreVersions = manager.appStoreVersions
+            localizations = manager.localizations
+            screenshotSets = manager.screenshotSets
+            screenshots = manager.screenshots
+            builds = manager.builds
+            inAppPurchases = manager.inAppPurchases
+            subscriptionGroups = manager.subscriptionGroups
+            subscriptionsPerGroup = manager.subscriptionsPerGroup
+            currentAppPricePointId = manager.currentAppPricePointId
+            scheduledAppPricePointId = manager.scheduledAppPricePointId
+            scheduledAppPriceEffectiveDate = manager.scheduledAppPriceEffectiveDate
+            appInfo = manager.appInfo
+            appInfoLocalization = manager.appInfoLocalization
+            ageRatingDeclaration = manager.ageRatingDeclaration
+            reviewDetail = manager.reviewDetail
+            reviewSubmissions = manager.reviewSubmissions
+            reviewSubmissionItemsBySubmissionId = manager.reviewSubmissionItemsBySubmissionId
+            latestSubmissionItems = manager.latestSubmissionItems
+            submissionHistoryEvents = manager.submissionHistoryEvents
+            attachedSubmissionItemIDs = manager.attachedSubmissionItemIDs
+            resolutionCenterThreads = manager.resolutionCenterThreads
+            rejectionMessages = manager.rejectionMessages
+            rejectionReasons = manager.rejectionReasons
+            cachedFeedback = manager.cachedFeedback
+            appIconStatus = manager.appIconStatus
+            monetizationStatus = manager.monetizationStatus
+            let cachedLoadedTabs = manager.loadedTabs.intersection([.app])
+            loadedTabs = cachedLoadedTabs
+            tabLoadedAt = manager.tabLoadedAt.filter { cachedLoadedTabs.contains($0.key) }
+        }
+
+        @MainActor
+        func apply(to manager: ASCManager) {
+            manager.app = app
+            manager.appStoreVersions = appStoreVersions
+            manager.localizations = localizations
+            manager.screenshotSets = screenshotSets
+            manager.screenshots = screenshots
+            manager.builds = builds
+            manager.inAppPurchases = inAppPurchases
+            manager.subscriptionGroups = subscriptionGroups
+            manager.subscriptionsPerGroup = subscriptionsPerGroup
+            manager.currentAppPricePointId = currentAppPricePointId
+            manager.scheduledAppPricePointId = scheduledAppPricePointId
+            manager.scheduledAppPriceEffectiveDate = scheduledAppPriceEffectiveDate
+            manager.appInfo = appInfo
+            manager.appInfoLocalization = appInfoLocalization
+            manager.ageRatingDeclaration = ageRatingDeclaration
+            manager.reviewDetail = reviewDetail
+            manager.reviewSubmissions = reviewSubmissions
+            manager.reviewSubmissionItemsBySubmissionId = reviewSubmissionItemsBySubmissionId
+            manager.latestSubmissionItems = latestSubmissionItems
+            manager.submissionHistoryEvents = submissionHistoryEvents
+            manager.attachedSubmissionItemIDs = attachedSubmissionItemIDs
+            manager.resolutionCenterThreads = resolutionCenterThreads
+            manager.rejectionMessages = rejectionMessages
+            manager.rejectionReasons = rejectionReasons
+            manager.cachedFeedback = cachedFeedback
+            manager.appIconStatus = appIconStatus
+            manager.monetizationStatus = monetizationStatus
+            manager.loadedTabs = loadedTabs
+            manager.tabLoadedAt = tabLoadedAt
+            manager.loadedProjectId = projectId
+            manager.tabError = [:]
+            manager.isLoadingTab = [:]
+            manager.isLoadingApp = false
+            manager.isLoadingIrisFeedback = false
+            manager.irisFeedbackError = nil
+            manager.writeError = nil
+            manager.submissionError = nil
+            manager.overviewReadinessLoadingFields = []
+        }
+    }
+
+    private static let overviewCacheFreshness: TimeInterval = 120
+    private static let overviewLocalizationFieldLabels: Set<String> = [
+        "App Name",
+        "Description",
+        "Keywords",
+        "Support URL"
+    ]
+    private static let overviewVersionFieldLabels: Set<String> = ["Copyright"]
+    private static let overviewAppInfoFieldLabels: Set<String> = ["Primary Category"]
+    private static let overviewMetadataFieldLabels: Set<String> = [
+        "Privacy Policy URL",
+        "Age Rating"
+    ]
+    private static let overviewReviewFieldLabels: Set<String> = [
+        "Review Contact First Name",
+        "Review Contact Last Name",
+        "Review Contact Email",
+        "Review Contact Phone",
+        "Demo Account Name",
+        "Demo Account Password"
+    ]
+    private static let overviewBuildFieldLabels: Set<String> = ["Build"]
+    private static let overviewPricingFieldLabels: Set<String> = [
+        "Pricing",
+        "In-App Purchases & Subscriptions"
+    ]
+    private static let overviewScreenshotFieldLabels: Set<String> = [
+        "Mac Screenshots",
+        "iPhone Screenshots",
+        "iPad Screenshots"
+    ]
+
     nonisolated init() {}
 
     // Credentials & service
@@ -161,30 +303,47 @@ final class ASCManager {
             "https://appstoreconnect.apple.com/apps/\($0.id)/distribution/privacy"
         }
 
+        func readinessField(
+            label: String,
+            value: String?,
+            required: Bool = true,
+            actionUrl: String? = nil,
+            hint: String? = nil
+        ) -> SubmissionReadiness.FieldStatus {
+            SubmissionReadiness.FieldStatus(
+                label: label,
+                value: value,
+                isLoading: overviewReadinessLoadingFields.contains(label) && (value == nil || value?.isEmpty == true),
+                required: required,
+                actionUrl: actionUrl,
+                hint: hint
+            )
+        }
+
         var fields: [SubmissionReadiness.FieldStatus] = [
-            .init(label: "App Name", value: info?.attributes.name ?? loc?.attributes.title),
-            .init(label: "Description", value: loc?.attributes.description),
-            .init(label: "Keywords", value: loc?.attributes.keywords),
-            .init(label: "Support URL", value: loc?.attributes.supportUrl),
-            .init(label: "Privacy Policy URL", value: info?.attributes.privacyPolicyUrl),
-            .init(label: "Copyright", value: version?.attributes.copyright),
-            .init(label: "Content Rights", value: app?.contentRightsDeclaration),
-            .init(label: "Primary Category", value: appInfo?.primaryCategoryId),
-            .init(label: "Age Rating", value: ageRatingIsConfigured ? "Configured" : nil),
-            .init(label: "Pricing", value: monetizationStatus),
-            .init(label: "Review Contact First Name", value: review?.attributes.contactFirstName),
-            .init(label: "Review Contact Last Name", value: review?.attributes.contactLastName),
-            .init(label: "Review Contact Email", value: review?.attributes.contactEmail),
-            .init(label: "Review Contact Phone", value: review?.attributes.contactPhone),
+            readinessField(label: "App Name", value: info?.attributes.name ?? loc?.attributes.title),
+            readinessField(label: "Description", value: loc?.attributes.description),
+            readinessField(label: "Keywords", value: loc?.attributes.keywords),
+            readinessField(label: "Support URL", value: loc?.attributes.supportUrl),
+            readinessField(label: "Privacy Policy URL", value: info?.attributes.privacyPolicyUrl),
+            readinessField(label: "Copyright", value: version?.attributes.copyright),
+            readinessField(label: "Content Rights", value: app?.contentRightsDeclaration),
+            readinessField(label: "Primary Category", value: appInfo?.primaryCategoryId),
+            readinessField(label: "Age Rating", value: ageRatingIsConfigured ? "Configured" : nil),
+            readinessField(label: "Pricing", value: monetizationStatus),
+            readinessField(label: "Review Contact First Name", value: review?.attributes.contactFirstName),
+            readinessField(label: "Review Contact Last Name", value: review?.attributes.contactLastName),
+            readinessField(label: "Review Contact Email", value: review?.attributes.contactEmail),
+            readinessField(label: "Review Contact Phone", value: review?.attributes.contactPhone),
         ]
 
         // Conditional: demo credentials required when demoAccountRequired is set
         if demoRequired {
-            fields.append(.init(label: "Demo Account Name", value: review?.attributes.demoAccountName))
-            fields.append(.init(label: "Demo Account Password", value: review?.attributes.demoAccountPassword))
+            fields.append(readinessField(label: "Demo Account Name", value: review?.attributes.demoAccountName))
+            fields.append(readinessField(label: "Demo Account Password", value: review?.attributes.demoAccountPassword))
         }
 
-        fields.append(.init(label: "App Icon", value: appIconStatus))
+        fields.append(readinessField(label: "App Icon", value: appIconStatus))
 
         // Count only non-failed screenshots for readiness
         func validCount(for set: ASCScreenshotSet?) -> Int {
@@ -197,17 +356,17 @@ final class ASCManager {
 
         if isMacApp {
             let macCount = validCount(for: macScreenshots)
-            fields.append(.init(label: "Mac Screenshots", value: macCount > 0 ? "\(macCount) screenshot(s)" : nil))
+            fields.append(readinessField(label: "Mac Screenshots", value: macCount > 0 ? "\(macCount) screenshot(s)" : nil))
         } else {
             let iphoneCount = validCount(for: iphoneScreenshots)
             let ipadCount = validCount(for: ipadScreenshots)
-            fields.append(.init(label: "iPhone Screenshots", value: iphoneCount > 0 ? "\(iphoneCount) screenshot(s)" : nil))
-            fields.append(.init(label: "iPad Screenshots", value: ipadCount > 0 ? "\(ipadCount) screenshot(s)" : nil))
+            fields.append(readinessField(label: "iPhone Screenshots", value: iphoneCount > 0 ? "\(iphoneCount) screenshot(s)" : nil))
+            fields.append(readinessField(label: "iPad Screenshots", value: ipadCount > 0 ? "\(ipadCount) screenshot(s)" : nil))
         }
 
         fields.append(contentsOf: [
-            .init(label: "Privacy Nutrition Labels", value: nil, required: false, actionUrl: privacyUrl),
-            .init(label: "Build", value: builds.first?.attributes.version),
+            readinessField(label: "Privacy Nutrition Labels", value: nil, required: false, actionUrl: privacyUrl),
+            readinessField(label: "Build", value: builds.first?.attributes.version),
         ])
 
         // Conditional: first-time IAP/subscription attachment
@@ -231,7 +390,7 @@ final class ASCManager {
                 let iapUrl: String? = app.map {
                     "https://appstoreconnect.apple.com/apps/\($0.id)/distribution/ios/version/inflight"
                 }
-                fields.append(.init(
+                fields.append(readinessField(
                     label: "In-App Purchases & Subscriptions",
                     value: nil,
                     required: true,
@@ -252,6 +411,10 @@ final class ASCManager {
     var isLoadingTab: [AppTab: Bool] = [:]
     var tabError: [AppTab: String] = [:]
     private var loadedTabs: Set<AppTab> = []
+    private var tabLoadedAt: [AppTab: Date] = [:]
+    private var overviewSnapshots: [String: OverviewSnapshot] = [:]
+    private var overviewHydrationTask: Task<Void, Never>?
+    private var overviewReadinessLoadingFields: Set<String> = []
 
     var loadedProjectId: String?
 
@@ -298,33 +461,16 @@ final class ASCManager {
         checkAppIcon(projectId: projectId)
     }
 
-    // MARK: - Project Lifecycle
+    private func resetProjectData(preserveCredentials: Bool) {
+        overviewHydrationTask?.cancel()
+        overviewHydrationTask = nil
+        overviewReadinessLoadingFields = []
 
-    func loadCredentials(for projectId: String, bundleId: String?) async {
-        guard loadedProjectId != projectId else { return }
-
-        isLoadingCredentials = true
-        credentialsError = nil
-
-        let creds = ASCCredentials.load()
-
-        credentials = creds
-        isLoadingCredentials = false
-        loadedProjectId = projectId
-        refreshAppIconStatusIfNeeded(for: projectId)
-
-        if let creds {
-            service = AppStoreConnectService(credentials: creds)
+        if !preserveCredentials {
+            credentials = nil
+            service = nil
         }
 
-        if let bundleId, !bundleId.isEmpty, creds != nil {
-            await fetchApp(bundleId: bundleId)
-        }
-    }
-
-    func clearForProjectSwitch() {
-        credentials = nil
-        service = nil
         app = nil
         isLoadingCredentials = false
         credentialsError = nil
@@ -365,7 +511,10 @@ final class ASCManager {
         isLoadingTab = [:]
         tabError = [:]
         loadedTabs = []
-        loadedProjectId = nil
+        tabLoadedAt = [:]
+        if !preserveCredentials {
+            loadedProjectId = nil
+        }
         // Clear iris data but keep session (it's account-wide, not project-specific)
         resolutionCenterThreads = []
         rejectionMessages = []
@@ -374,6 +523,89 @@ final class ASCManager {
         isLoadingIrisFeedback = false
         irisFeedbackError = nil
         cancelPendingWebAuth()
+    }
+
+    private func cacheCurrentOverviewSnapshot() {
+        guard let projectId = loadedProjectId else { return }
+        guard app != nil || !appStoreVersions.isEmpty || loadedTabs.contains(.app) else { return }
+        overviewSnapshots[projectId] = OverviewSnapshot(manager: self, projectId: projectId)
+    }
+
+    private func startOverviewReadinessLoading(_ fields: Set<String>) {
+        overviewReadinessLoadingFields = fields
+    }
+
+    private func finishOverviewReadinessLoading(_ fields: Set<String>) {
+        overviewReadinessLoadingFields.subtract(fields)
+    }
+
+    private func shouldRefreshOverviewCache() -> Bool {
+        guard loadedTabs.contains(.app) else { return true }
+        guard let loadedAt = tabLoadedAt[.app] else { return true }
+        return Date().timeIntervalSince(loadedAt) > Self.overviewCacheFreshness
+    }
+
+    private func isCurrentProject(_ projectId: String?) -> Bool {
+        guard let projectId else { return false }
+        return loadedProjectId == projectId
+    }
+
+    func prepareForProjectSwitch(to projectId: String) {
+        cacheCurrentOverviewSnapshot()
+        resetProjectData(preserveCredentials: true)
+
+        if let snapshot = overviewSnapshots[projectId] {
+            snapshot.apply(to: self)
+        } else {
+            loadedProjectId = projectId
+        }
+    }
+
+    func ensureTabData(_ tab: AppTab) async {
+        guard credentials != nil else { return }
+
+        if loadedTabs.contains(tab) {
+            if tab == .app && shouldRefreshOverviewCache() {
+                await refreshTabData(tab)
+            }
+            return
+        }
+
+        await fetchTabData(tab)
+    }
+
+    // MARK: - Project Lifecycle
+
+    func loadCredentials(for projectId: String, bundleId: String?) async {
+        let needsCredentialReload = credentials == nil || service == nil
+        let shouldSkip = loadedProjectId == projectId
+            && !needsCredentialReload
+            && (bundleId == nil || app != nil)
+        guard !shouldSkip else { return }
+
+        credentialsError = nil
+
+        if needsCredentialReload {
+            isLoadingCredentials = true
+            let creds = ASCCredentials.load()
+            credentials = creds
+            isLoadingCredentials = false
+
+            if let creds {
+                service = AppStoreConnectService(credentials: creds)
+            }
+        }
+
+        loadedProjectId = projectId
+        refreshAppIconStatusIfNeeded(for: projectId)
+
+        if let bundleId, !bundleId.isEmpty, credentials != nil, app == nil {
+            await fetchApp(bundleId: bundleId)
+        }
+    }
+
+    func clearForProjectSwitch() {
+        resetProjectData(preserveCredentials: false)
     }
 
     // MARK: - Iris Session (Apple ID auth for rejection feedback)
@@ -987,6 +1219,7 @@ final class ASCManager {
             try await loadData(for: tab, service: service)
             isLoadingTab[tab] = false
             loadedTabs.insert(tab)
+            tabLoadedAt[tab] = Date()
         } catch {
             isLoadingTab[tab] = false
             tabError[tab] = error.localizedDescription
@@ -998,6 +1231,7 @@ final class ASCManager {
     func resetTabState() {
         tabError.removeAll()
         loadedTabs.removeAll()
+        tabLoadedAt.removeAll()
     }
 
     func refreshTabData(_ tab: AppTab) async {
@@ -1012,6 +1246,7 @@ final class ASCManager {
             try await loadData(for: tab, service: service)
             isLoadingTab[tab] = false
             loadedTabs.insert(tab)
+            tabLoadedAt[tab] = Date()
         } catch {
             isLoadingTab[tab] = false
             tabError[tab] = error.localizedDescription
@@ -1023,6 +1258,77 @@ final class ASCManager {
         await refreshAttachedSubmissionItemIDs()
     }
 
+    private func hydrateOverviewSecondaryData(
+        projectId: String?,
+        appId: String,
+        firstLocalizationId: String?,
+        appInfoId: String?,
+        service: AppStoreConnectService
+    ) async {
+        if let firstLocalizationId {
+            do {
+                let fetchedSets = try await service.fetchScreenshotSets(localizationId: firstLocalizationId)
+                guard !Task.isCancelled, isCurrentProject(projectId) else { return }
+                screenshotSets = fetchedSets
+
+                let fetchedScreenshots = try await withThrowingTaskGroup(of: (String, [ASCScreenshot]).self) { group in
+                    for set in fetchedSets {
+                        group.addTask {
+                            let screenshots = try await service.fetchScreenshots(setId: set.id)
+                            return (set.id, screenshots)
+                        }
+                    }
+
+                    var pairs: [(String, [ASCScreenshot])] = []
+                    for try await pair in group {
+                        pairs.append(pair)
+                    }
+                    return pairs
+                }
+
+                guard !Task.isCancelled, isCurrentProject(projectId) else { return }
+                screenshots = Dictionary(uniqueKeysWithValues: fetchedScreenshots)
+                finishOverviewReadinessLoading(Self.overviewScreenshotFieldLabels)
+            } catch {
+                print("Failed to hydrate overview screenshots: \(error)")
+                finishOverviewReadinessLoading(Self.overviewScreenshotFieldLabels)
+            }
+        } else {
+            finishOverviewReadinessLoading(Self.overviewScreenshotFieldLabels)
+        }
+
+        if let appInfoId {
+            async let ageRatingTask: ASCAgeRatingDeclaration? = try? service.fetchAgeRating(appInfoId: appInfoId)
+            async let appInfoLocalizationTask: ASCAppInfoLocalization? = try? service.fetchAppInfoLocalization(appInfoId: appInfoId)
+
+            let fetchedAgeRating = await ageRatingTask
+            let fetchedAppInfoLocalization = await appInfoLocalizationTask
+
+            guard !Task.isCancelled, isCurrentProject(projectId) else { return }
+            ageRatingDeclaration = fetchedAgeRating
+            appInfoLocalization = fetchedAppInfoLocalization
+            finishOverviewReadinessLoading(Self.overviewMetadataFieldLabels)
+        } else {
+            finishOverviewReadinessLoading(Self.overviewMetadataFieldLabels)
+        }
+
+        guard !Task.isCancelled, isCurrentProject(projectId) else { return }
+        await refreshReviewSubmissionData(appId: appId, service: service)
+        guard !Task.isCancelled, isCurrentProject(projectId) else { return }
+        rebuildSubmissionHistory(appId: appId)
+        refreshSubmissionFeedbackIfNeeded()
+
+        if monetizationStatus == nil {
+            let hasPricing = await service.fetchPricingConfigured(appId: appId)
+            guard !Task.isCancelled, isCurrentProject(projectId) else { return }
+            monetizationStatus = hasPricing ? "Configured" : nil
+        }
+
+        guard !Task.isCancelled, isCurrentProject(projectId) else { return }
+        await refreshSubmissionReadinessData()
+        finishOverviewReadinessLoading(Self.overviewPricingFieldLabels)
+    }
+
     private func loadData(for tab: AppTab, service: AppStoreConnectService) async throws {
         guard let appId = app?.id else {
             throw ASCError.notFound("App — check your bundle ID in project settings")
@@ -1031,38 +1337,60 @@ final class ASCManager {
         switch tab {
         case .app:
             refreshAppIconStatusIfNeeded(for: loadedProjectId)
-            let versions = try await service.fetchAppStoreVersions(appId: appId)
+            startOverviewReadinessLoading(
+                Self.overviewLocalizationFieldLabels
+                    .union(Self.overviewVersionFieldLabels)
+                    .union(Self.overviewAppInfoFieldLabels)
+                    .union(Self.overviewMetadataFieldLabels)
+                    .union(Self.overviewReviewFieldLabels)
+                    .union(Self.overviewBuildFieldLabels)
+                    .union(Self.overviewPricingFieldLabels)
+                    .union(Self.overviewScreenshotFieldLabels)
+            )
+            async let versionsTask = service.fetchAppStoreVersions(appId: appId)
+            async let appInfoTask: ASCAppInfo? = try? service.fetchAppInfo(appId: appId)
+            async let buildsTask = service.fetchBuilds(appId: appId)
+
+            let versions = try await versionsTask
             appStoreVersions = versions
-            appInfo = try? await service.fetchAppInfo(appId: appId)
-            // Fetch all data needed for submission readiness
+            finishOverviewReadinessLoading(Self.overviewVersionFieldLabels)
+            appInfo = await appInfoTask
+            finishOverviewReadinessLoading(Self.overviewAppInfoFieldLabels)
+            builds = try await buildsTask
+            finishOverviewReadinessLoading(Self.overviewBuildFieldLabels)
+
+            var firstLocalizationId: String?
             if let latestId = versions.first?.id {
-                localizations = try await service.fetchLocalizations(versionId: latestId)
-                reviewDetail = try? await service.fetchReviewDetail(versionId: latestId)
-                let locs = localizations
-                if let firstLocId = locs.first?.id {
-                    let sets = try await service.fetchScreenshotSets(localizationId: firstLocId)
-                    screenshotSets = sets
-                    for set in sets {
-                        screenshots[set.id] = try await service.fetchScreenshots(setId: set.id)
-                    }
-                }
+                async let localizationsTask = service.fetchLocalizations(versionId: latestId)
+                async let reviewDetailTask: ASCReviewDetail? = try? service.fetchReviewDetail(versionId: latestId)
+
+                let fetchedLocalizations = try await localizationsTask
+                localizations = fetchedLocalizations
+                firstLocalizationId = fetchedLocalizations.first?.id
+                finishOverviewReadinessLoading(Self.overviewLocalizationFieldLabels)
+                reviewDetail = await reviewDetailTask
+                finishOverviewReadinessLoading(Self.overviewReviewFieldLabels)
+            } else {
+                finishOverviewReadinessLoading(
+                    Self.overviewLocalizationFieldLabels
+                        .union(Self.overviewReviewFieldLabels)
+                )
             }
-            if let infoId = appInfo?.id {
-                ageRatingDeclaration = try? await service.fetchAgeRating(appInfoId: infoId)
-                appInfoLocalization = try? await service.fetchAppInfoLocalization(appInfoId: infoId)
-            }
-            builds = try await service.fetchBuilds(appId: appId)
-            await refreshReviewSubmissionData(appId: appId, service: service)
-            rebuildSubmissionHistory(appId: appId)
+
             refreshSubmissionFeedbackIfNeeded()
 
-            // Check monetization status — skip if already set (avoids race with in-flight fetches overwriting optimistic updates from setPriceFree/setAppPrice)
-            if monetizationStatus == nil {
-                let hasPricing = await service.fetchPricingConfigured(appId: appId)
-                monetizationStatus = hasPricing ? "Configured" : nil
+            overviewHydrationTask?.cancel()
+            let projectId = loadedProjectId
+            let currentAppInfoId = appInfo?.id
+            overviewHydrationTask = Task {
+                await self.hydrateOverviewSecondaryData(
+                    projectId: projectId,
+                    appId: appId,
+                    firstLocalizationId: firstLocalizationId,
+                    appInfoId: currentAppInfoId,
+                    service: service
+                )
             }
-
-            await refreshSubmissionReadinessData()
 
         case .storeListing:
             let versions = try await service.fetchAppStoreVersions(appId: appId)

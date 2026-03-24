@@ -421,14 +421,23 @@ struct SubmissionReadiness {
         let id: String
         let label: String
         let value: String?
+        let isLoading: Bool
         let required: Bool
         let actionUrl: String?  // If set, shows an "Open in ASC" button
         let hint: String?       // Agent-visible guidance for resolving this field
 
-        init(label: String, value: String?, required: Bool = true, actionUrl: String? = nil, hint: String? = nil) {
+        init(
+            label: String,
+            value: String?,
+            isLoading: Bool = false,
+            required: Bool = true,
+            actionUrl: String? = nil,
+            hint: String? = nil
+        ) {
             self.id = label
             self.label = label
             self.value = value
+            self.isLoading = isLoading
             self.required = required
             self.actionUrl = actionUrl
             self.hint = hint
@@ -438,11 +447,11 @@ struct SubmissionReadiness {
     var fields: [FieldStatus]
 
     var isComplete: Bool {
-        fields.filter(\.required).allSatisfy { $0.value != nil && !($0.value!.isEmpty) }
+        fields.filter(\.required).allSatisfy { !$0.isLoading && $0.value != nil && !($0.value!.isEmpty) }
     }
 
     var missingRequired: [FieldStatus] {
-        fields.filter { $0.required && ($0.value == nil || $0.value!.isEmpty) }
+        fields.filter { $0.required && !$0.isLoading && ($0.value == nil || $0.value!.isEmpty) }
     }
 }
 

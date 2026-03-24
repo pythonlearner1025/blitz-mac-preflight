@@ -158,7 +158,7 @@ struct ContentView: View {
                 if appState.activeTab.isASCTab {
                     await appState.ascManager.fetchTabData(appState.activeTab)
                 } else if appState.activeTab == .app && appState.activeAppSubTab == .overview {
-                    await appState.ascManager.fetchTabData(.app)
+                    await appState.ascManager.ensureTabData(.app)
                 }
             }
         }
@@ -170,13 +170,16 @@ struct ContentView: View {
                 mainWindow?.close()
             } else {
                 // Project switched → ensure config files, run pending setup, reload ASC credentials
+                if let newId = newValue {
+                    appState.ascManager.prepareForProjectSwitch(to: newId)
+                }
+
                 if let newId = newValue, let projectType = appState.activeProject?.type {
                     refreshProjectFiles(projectId: newId, projectType: projectType)
                 }
 
                 Task {
                     await startPendingSetupIfNeeded()
-                    appState.ascManager.clearForProjectSwitch()
                     if let newId = newValue, let project = appState.activeProject {
                         await appState.ascManager.loadCredentials(
                             for: newId,
@@ -185,7 +188,7 @@ struct ContentView: View {
                         if appState.activeTab.isASCTab {
                             await appState.ascManager.fetchTabData(appState.activeTab)
                         } else if appState.activeTab == .app && appState.activeAppSubTab == .overview {
-                            await appState.ascManager.fetchTabData(.app)
+                            await appState.ascManager.ensureTabData(.app)
                         }
                     }
                 }
@@ -237,7 +240,7 @@ struct ContentView: View {
                 }
                 // Fetch ASC overview data when entering overview sub-tab
                 if newSub == .overview {
-                    await appState.ascManager.fetchTabData(.app)
+                    await appState.ascManager.ensureTabData(.app)
                 }
             }
         }
