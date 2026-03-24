@@ -182,11 +182,11 @@ final class AutoUpdateManager {
         APP_SRC=$(find \\"$UNZIP_DIR\\" -maxdepth 1 -name '*.app' -type d | head -1); \
         if [ -z \\"$APP_SRC\\" ]; then rm -rf \\"$UNZIP_DIR\\"; exit 1; fi; \
         PREINSTALL=\\"$APP_SRC/Contents/Resources/pkg-scripts/preinstall\\"; \
-        if [ -x \\"$PREINSTALL\\" ]; then \\"$PREINSTALL\\" '' '' '/' >> /tmp/blitz_install.log 2>&1 || true; fi; \
+        if [ -x \\"$PREINSTALL\\" ]; then BLITZ_UPDATE_CONTEXT='auto-update' \\"$PREINSTALL\\" '' '' '/' >> /tmp/blitz_install.log 2>&1 || true; fi; \
         rm -rf /Applications/Blitz.app; \
         mv \\"$APP_SRC\\" /Applications/Blitz.app; \
         POSTINSTALL='/Applications/Blitz.app/Contents/Resources/pkg-scripts/postinstall'; \
-        if [ -x \\"$POSTINSTALL\\" ]; then \\"$POSTINSTALL\\" '' '' '/' >> /tmp/blitz_install.log 2>&1 || true; fi; \
+        if [ -x \\"$POSTINSTALL\\" ]; then BLITZ_UPDATE_CONTEXT='auto-update' \\"$POSTINSTALL\\" '' '' '/' >> /tmp/blitz_install.log 2>&1 || true; fi; \
         rm -rf \\"$UNZIP_DIR\\" \\"$TMPZIP\\"\
         "
         """
