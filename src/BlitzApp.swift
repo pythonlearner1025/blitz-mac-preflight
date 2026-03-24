@@ -11,7 +11,7 @@ final class MCPBootstrap {
         guard !started else { return }
         started = true
 
-        installBridgeScript()
+        installMCPHelper()
         installClaudeSkills()
         updateIphoneMCP()
         ProjectStorage().ensureGlobalMCPConfigs(whitelistBlitzMCP: appState.settingsStore.whitelistBlitzMCPTools)
@@ -74,7 +74,7 @@ final class MCPBootstrap {
             do {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: npm)
-                process.arguments = ["install", "-g", "@blitzdev/iphone-mcp@latest"]
+                process.arguments = ["install", "-g", "--prefix", BlitzPaths.root.appendingPathComponent("node-runtime").path, "@blitzdev/iphone-mcp@latest"]
                 process.environment = [
                     "PATH": "\(BlitzPaths.nodeDir.path):/usr/bin:/bin",
                     "HOME": FileManager.default.homeDirectoryForCurrentUser.path
@@ -94,49 +94,54 @@ final class MCPBootstrap {
         }
     }
 
-    private func installBridgeScript() {
+    private func installMCPHelper() {
+        let fm = FileManager.default
         let destDir = BlitzPaths.root
-        let destFile = BlitzPaths.mcpBridge
 
-        if let bundlePath = Bundle.main.path(forResource: "blitz-mcp-bridge", ofType: "sh") {
-            try? FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
-            try? FileManager.default.removeItem(at: destFile)
-            try? FileManager.default.copyItem(atPath: bundlePath, toPath: destFile.path)
-            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destFile.path)
+        try? fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+
+        if let sourceURL = bundledMCPHelperURL() {
+            try? fm.removeItem(at: BlitzPaths.mcpHelper)
+            try? fm.copyItem(at: sourceURL, to: BlitzPaths.mcpHelper)
+            try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: BlitzPaths.mcpHelper.path)
         } else {
-            let script = """
-            #!/bin/bash
-            PORT_FILE="$HOME/.blitz/mcp-port"
-            WAITED=0
-            while [ ! -f "$PORT_FILE" ] && [ "$WAITED" -lt 10 ]; do
-                sleep 1
-                WAITED=$((WAITED + 1))
-            done
-            if [ ! -f "$PORT_FILE" ]; then
-                echo '{"jsonrpc":"2.0","id":1,"error":{"code":-1,"message":"Blitz is not running."}}' >&2
-                exit 1
-            fi
-            PORT=$(cat "$PORT_FILE")
-            WAITED=0
-            while ! curl -s -o /dev/null -w '' "http://127.0.0.1:${PORT}/mcp" 2>/dev/null && [ "$WAITED" -lt 5 ]; do
-                sleep 1
-                WAITED=$((WAITED + 1))
-            done
-            while IFS= read -r line; do
-                [ -z "$line" ] && continue
-                response=$(curl -s -X POST "http://127.0.0.1:${PORT}/mcp" \\
-                    -H "Content-Type: application/json" -d "$line" 2>/dev/null)
-                if [ $? -ne 0 ]; then
-                    echo '{"jsonrpc":"2.0","id":null,"error":{"code":-1,"message":"Cannot connect to Blitz."}}' >&2
-                    exit 1
-                fi
-                echo "$response"
-            done
-            """
-            try? FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
-            try? script.write(to: destFile, atomically: true, encoding: .utf8)
-            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destFile.path)
+            print("[MCP] Failed to locate bundled blitz-macos-mcp helper")
         }
+
+        // Keep the old script path working for manually created configs while
+        // new project configs point directly at the helper executable.
+        let bridgeScript = """
+        #!/bin/bash
+        HELPER="$HOME/.blitz/blitz-macos-mcp"
+        if [ ! -x "$HELPER" ]; then
+            echo '{"jsonrpc":"2.0","id":null,"error":{"code":-1,"message":"Blitz MCP helper is not installed. Start Blitz first."}}' >&2
+            exit 1
+        fi
+        exec "$HELPER" "$@"
+        """
+        try? bridgeScript.write(to: BlitzPaths.mcpBridge, atomically: true, encoding: .utf8)
+        try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: BlitzPaths.mcpBridge.path)
+    }
+
+    private func bundledMCPHelperURL() -> URL? {
+        let fm = FileManager.default
+
+        let bundledHelper = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Helpers/blitz-macos-mcp")
+        if fm.isExecutableFile(atPath: bundledHelper.path) {
+            return bundledHelper
+        }
+
+        if let executableURL = Bundle.main.executableURL {
+            let siblingHelper = executableURL
+                .deletingLastPathComponent()
+                .appendingPathComponent("blitz-macos-mcp")
+            if fm.isExecutableFile(atPath: siblingHelper.path) {
+                return siblingHelper
+            }
+        }
+
+        return nil
     }
 }
 

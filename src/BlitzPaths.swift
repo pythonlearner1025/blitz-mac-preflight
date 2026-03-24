@@ -1,3 +1,4 @@
+import BlitzMCPCommon
 import Foundation
 
 /// Central source of truth for all ~/.blitz/ paths used across the app.
@@ -18,11 +19,14 @@ enum BlitzPaths {
     /// Settings file: ~/.blitz/settings.json
     static var settings: URL { root.appendingPathComponent("settings.json") }
 
-    /// MCP port file: ~/.blitz/mcp-port
-    static var mcpPort: URL { root.appendingPathComponent("mcp-port") }
+    /// MCP helper executable: ~/.blitz/blitz-macos-mcp
+    static var mcpHelper: URL { BlitzMCPTransportPaths.helper }
 
-    /// MCP bridge script: ~/.blitz/blitz-mcp-bridge.sh
-    static var mcpBridge: URL { root.appendingPathComponent("blitz-mcp-bridge.sh") }
+    /// Compatibility bridge script: ~/.blitz/blitz-mcp-bridge.sh
+    static var mcpBridge: URL { BlitzMCPTransportPaths.bridgeScript }
+
+    /// Local Unix socket used by the app-owned MCP executor.
+    static var mcpSocket: URL { BlitzMCPTransportPaths.socket }
 
     /// Signing base directory: ~/.blitz/signing/
     static var signing: URL { root.appendingPathComponent("signing") }

@@ -8,15 +8,21 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
+        .library(name: "BlitzMCPCommon", targets: ["BlitzMCPCommon"]),
         .executable(name: "Blitz", targets: ["Blitz"]),
+        .executable(name: "blitz-macos-mcp", targets: ["BlitzMCPHelper"]),
     ],
     dependencies: [
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0"),
     ],
     targets: [
+        .target(
+            name: "BlitzMCPCommon",
+            path: "Sources/BlitzMCPCommon"
+        ),
         .executableTarget(
             name: "Blitz",
-            dependencies: ["SwiftTerm"],
+            dependencies: ["SwiftTerm", "BlitzMCPCommon"],
             path: "src",
             exclude: ["metal"],
             resources: [.process("resources"), .copy("templates")],
@@ -30,6 +36,11 @@ let package = Package(
                 .linkedFramework("AppKit"),
                 .linkedFramework("WebKit"),
             ]
+        ),
+        .executableTarget(
+            name: "BlitzMCPHelper",
+            dependencies: ["BlitzMCPCommon"],
+            path: "Sources/BlitzMCPHelper"
         ),
         .testTarget(
             name: "BlitzTests",

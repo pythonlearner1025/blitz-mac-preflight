@@ -223,11 +223,10 @@ struct ProjectStorage {
     /// Shared implementation: writes .mcp.json and .codex/config.toml into `directory`.
     func ensureMCPConfig(in directory: URL) {
         let mcpFile = directory.appendingPathComponent(".mcp.json")
-        let bridgePath = BlitzPaths.mcpBridge.path
+        let helperPath = BlitzPaths.mcpHelper.path
 
         let blitzMacosEntry: [String: Any] = [
-            "command": "bash",
-            "args": [bridgePath]
+            "command": helperPath
         ]
         // Use full path to npx from Blitz's bundled Node.js runtime.
         // Also set PATH env so that #!/usr/bin/env node resolves correctly —
@@ -270,8 +269,7 @@ struct ProjectStorage {
         let codexConfig = codexDir.appendingPathComponent("config.toml")
         let toml = """
         [mcp_servers.blitz_macos]
-        command = "bash"
-        args = ["\(bridgePath)"]
+        command = "\(helperPath)"
         cwd = "\(directory.path)"
         """
         do {

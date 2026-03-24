@@ -31,14 +31,26 @@ VERSION=$(node -e "const p=JSON.parse(require('fs').readFileSync('$ROOT_DIR/pack
 echo "Building $APP_NAME.app v$VERSION ($CONFIG)..."
 
 # Build
-swift build -c "$CONFIG"
+swift build -c "$CONFIG" --product Blitz
+swift build -c "$CONFIG" --product blitz-macos-mcp
 
 # Create .app structure
 mkdir -p "$BUNDLE_DIR/Contents/MacOS"
 mkdir -p "$BUNDLE_DIR/Contents/Resources"
+mkdir -p "$BUNDLE_DIR/Contents/Helpers"
 
 # Copy binary
 cp ".build/${CONFIG}/${APP_NAME}" "$BUNDLE_DIR/Contents/MacOS/${APP_NAME}"
+
+# Copy the standalone MCP helper that Codex launches directly over stdio.
+HELPER_BINARY=".build/${CONFIG}/blitz-macos-mcp"
+if [ -f "$HELPER_BINARY" ]; then
+    cp "$HELPER_BINARY" "$BUNDLE_DIR/Contents/Helpers/blitz-macos-mcp"
+    chmod 755 "$BUNDLE_DIR/Contents/Helpers/blitz-macos-mcp"
+    echo "Copied blitz-macos-mcp helper into app bundle"
+else
+    echo "WARNING: blitz-macos-mcp helper was not built; MCP integration will be unavailable."
+fi
 
 # Generate app icon (.icns) from PNG
 ICON_PNG="$ROOT_DIR/src/resources/blitz-icon.png"
@@ -167,6 +179,10 @@ if [ "$SIGNING_IDENTITY" != "-" ]; then
         codesign_bundle_path "$f" 2>/dev/null || true
         echo "  Signed: $f"
     done
+    if [ -f "$BUNDLE_DIR/Contents/Helpers/blitz-macos-mcp" ]; then
+        codesign_bundle_path "$BUNDLE_DIR/Contents/Helpers/blitz-macos-mcp"
+        echo "  Signed: $BUNDLE_DIR/Contents/Helpers/blitz-macos-mcp"
+    fi
 fi
 
 # Sign the .app bundle (must be after nested signing)

@@ -1,218 +1,226 @@
+import Darwin
 import Foundation
 
-/// MCP (Model Context Protocol) HTTP server for Claude Code integration
-/// Port of server/mcp/mcp-server.ts
+/// MCP server endpoint owned by the Blitz app.
+/// Codex launches a separate stdio helper, and the helper forwards each JSON-RPC
+/// request over a Unix domain socket to the running app.
 actor MCPServerService {
     private var acceptSource: DispatchSourceRead?
     private var serverSocket: Int32 = -1
-    private(set) var port: Int = 0
     private(set) var isRunning = false
 
     private let toolExecutor: MCPToolExecutor
 
-    private static var portFileURL: URL {
-        BlitzPaths.mcpPort
-    }
-
     init(appState: AppState) {
         self.toolExecutor = MCPToolExecutor(appState: appState)
 
-        // Store executor reference in AppState for approval resolution
         Task { @MainActor in
             appState.toolExecutor = self.toolExecutor
         }
     }
 
-    /// Start the MCP server on a free port
     func start() async throws {
-        let assignedPort = PortAllocator.findFreePort()
-        guard assignedPort > 0 else {
-            throw MCPError.noPortAvailable
-        }
-        self.port = Int(assignedPort)
+        guard !isRunning else { return }
 
-        // Create TCP socket
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw MCPError.socketCreationFailed }
-
-        var reuse: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
-
-        var addr = sockaddr_in()
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = UInt16(assignedPort).bigEndian
-        addr.sin_addr.s_addr = UInt32(0x7F000001).bigEndian
-
-        let bindResult = withUnsafePointer(to: &addr) { ptr in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
-                bind(fd, sockPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-
-        guard bindResult == 0 else {
-            close(fd)
-            throw MCPError.bindFailed
-        }
-
-        guard listen(fd, 5) == 0 else {
-            close(fd)
-            throw MCPError.listenFailed
-        }
-
-        serverSocket = fd
+        let socketFD = try createServerSocket()
+        serverSocket = socketFD
         isRunning = true
 
-        // Write port file for bridge script
-        writePortFile(port: Int(assignedPort))
-
-        print("[MCP] Server listening on port \(assignedPort)")
-
-        // Accept connections in background using DispatchSource
-        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .global(qos: .userInitiated))
+        let source = DispatchSource.makeReadSource(
+            fileDescriptor: socketFD,
+            queue: DispatchQueue(label: "blitz.mcp.accept")
+        )
         source.setEventHandler { [weak self] in
-            var clientAddr = sockaddr_in()
-            var addrLen = socklen_t(MemoryLayout<sockaddr_in>.size)
-            let clientFd = withUnsafeMutablePointer(to: &clientAddr) { ptr in
-                ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
-                    accept(fd, sockPtr, &addrLen)
-                }
-            }
-            if clientFd < 0 { return }
-            Task { [weak self] in
-                await self?.handleConnection(clientFd)
+            guard let self else { return }
+            Task {
+                await self.acceptPendingConnections()
             }
         }
         source.resume()
-        self.acceptSource = source as? DispatchSource
+        acceptSource = source
+
+        print("[MCP] Server listening on Unix socket \(BlitzPaths.mcpSocket.path)")
     }
 
-    /// Stop the MCP server
     func stop() {
         acceptSource?.cancel()
         acceptSource = nil
+
         if serverSocket >= 0 {
-            close(serverSocket)
+            Darwin.close(serverSocket)
             serverSocket = -1
         }
+
         isRunning = false
-        removePortFile()
+        removeSocketFile()
     }
 
-    /// Handle a single client connection
-    private func handleConnection(_ fd: Int32) async {
-        defer { close(fd) }
+    private func createServerSocket() throws -> Int32 {
+        removeSocketFile()
 
-        // Read HTTP request with larger buffer for tool arguments
-        var requestData = Data()
-        let bufSize = 65536
-        let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: bufSize)
-        defer { buf.deallocate() }
+        let socketFD = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard socketFD >= 0 else {
+            throw MCPError.socketCreationFailed
+        }
 
-        // Read until we have the full body
-        var totalRead = 0
-        var contentLength = -1
+        var address = try makeSocketAddress()
+        let addressLength = socklen_t(address.sun_len)
+        let bindResult = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                Darwin.bind(socketFD, sockaddrPointer, addressLength)
+            }
+        }
+        guard bindResult == 0 else {
+            Darwin.close(socketFD)
+            throw MCPError.bindFailed(code: errno)
+        }
+
+        guard Darwin.listen(socketFD, SOMAXCONN) == 0 else {
+            Darwin.close(socketFD)
+            throw MCPError.listenFailed(code: errno)
+        }
+
+        let currentFlags = fcntl(socketFD, F_GETFL, 0)
+        if currentFlags >= 0 {
+            _ = fcntl(socketFD, F_SETFL, currentFlags | O_NONBLOCK)
+        }
+
+        _ = chmod(BlitzPaths.mcpSocket.path, mode_t(0o600))
+        return socketFD
+    }
+
+    private func acceptPendingConnections() async {
+        while serverSocket >= 0 {
+            let clientFD = Darwin.accept(serverSocket, nil, nil)
+            if clientFD < 0 {
+                if errno == EWOULDBLOCK || errno == EAGAIN {
+                    return
+                }
+                print("[MCP] accept() failed: \(errno)")
+                return
+            }
+
+            // Client sockets inherit O_NONBLOCK from the listening socket.
+            // Reset to blocking so large responses (e.g. tools/list) don't
+            // fail with EAGAIN when the send buffer fills.
+            let flags = fcntl(clientFD, F_GETFL, 0)
+            if flags >= 0 {
+                _ = fcntl(clientFD, F_SETFL, flags & ~O_NONBLOCK)
+            }
+
+            Task.detached { [weak self] in
+                await self?.handleConnection(clientFD)
+            }
+        }
+    }
+
+    private func handleConnection(_ clientFD: Int32) async {
+        defer { Darwin.close(clientFD) }
+
+        do {
+            guard let line = try readLine(from: clientFD) else { return }
+            if let response = await processMCPLine(line) {
+                try writeLine(response, to: clientFD)
+            }
+        } catch {
+            print("[MCP] Socket client failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func readLine(from fd: Int32) throws -> String? {
+        var timeout = timeval(tv_sec: 30, tv_usec: 0)
+        withUnsafePointer(to: &timeout) { pointer in
+            _ = setsockopt(
+                fd,
+                SOL_SOCKET,
+                SO_RCVTIMEO,
+                pointer,
+                socklen_t(MemoryLayout<timeval>.size)
+            )
+        }
+
+        var data = Data()
+        var byte: UInt8 = 0
 
         while true {
-            let bytesRead = recv(fd, buf, bufSize, 0)
-            guard bytesRead > 0 else { break }
-            requestData.append(buf, count: bytesRead)
-            totalRead += bytesRead
+            let count = Darwin.read(fd, &byte, 1)
+            if count == 0 {
+                return data.isEmpty ? nil : String(data: data, encoding: .utf8)
+            }
+            if count < 0 {
+                throw MCPError.readFailed(code: errno)
+            }
+            if byte == 0x0A {
+                return String(data: data, encoding: .utf8)
+            }
+            data.append(byte)
+        }
+    }
 
-            // Parse content-length from headers if not yet found
-            if contentLength < 0, let str = String(data: requestData, encoding: .utf8) {
-                if let range = str.range(of: "\r\n\r\n") {
-                    let headers = String(str[..<range.lowerBound]).lowercased()
-                    if let clRange = headers.range(of: "content-length: ") {
-                        let afterCL = headers[clRange.upperBound...]
-                        if let endLine = afterCL.firstIndex(of: "\r") ?? afterCL.firstIndex(of: "\n") {
-                            contentLength = Int(afterCL[..<endLine]) ?? 0
-                        }
-                    }
-                    let headerSize = str.distance(from: str.startIndex, to: range.upperBound)
-                    let bodySize = requestData.count - headerSize
-                    if contentLength <= 0 || bodySize >= contentLength { break }
-                } else {
-                    continue // Haven't received full headers yet
+    private func writeLine(_ line: String, to fd: Int32) throws {
+        let data = Data((line + "\n").utf8)
+        try data.withUnsafeBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else { return }
+            var bytesWritten = 0
+
+            while bytesWritten < rawBuffer.count {
+                let pointer = baseAddress.advanced(by: bytesWritten)
+                let result = Darwin.write(fd, pointer, rawBuffer.count - bytesWritten)
+                if result < 0 {
+                    throw MCPError.writeFailed(code: errno)
                 }
-            } else if contentLength >= 0 {
-                // Check if we have enough body data
-                if let str = String(data: requestData, encoding: .utf8),
-                   let range = str.range(of: "\r\n\r\n") {
-                    let headerSize = str.distance(from: str.startIndex, to: range.upperBound)
-                    let bodySize = requestData.count - headerSize
-                    if bodySize >= contentLength { break }
-                }
-            } else {
-                break
+                bytesWritten += result
+            }
+        }
+    }
+
+    private func makeSocketAddress() throws -> sockaddr_un {
+        var address = sockaddr_un()
+        let path = BlitzPaths.mcpSocket.path
+        let pathLength = path.utf8.count
+        let maxPathLength = MemoryLayout.size(ofValue: address.sun_path) - 1
+
+        guard pathLength <= maxPathLength else {
+            throw MCPError.invalidSocketPath
+        }
+
+        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+        address.sun_family = sa_family_t(AF_UNIX)
+
+        withUnsafeMutableBytes(of: &address.sun_path) { destination in
+            path.withCString { source in
+                destination.copyBytes(from: UnsafeRawBufferPointer(start: source, count: pathLength + 1))
             }
         }
 
-        guard let requestStr = String(data: requestData, encoding: .utf8) else { return }
-
-        // Parse HTTP request line
-        let lines = requestStr.components(separatedBy: "\r\n")
-        guard let requestLine = lines.first else { return }
-        let parts = requestLine.components(separatedBy: " ")
-        guard parts.count >= 2 else { return }
-
-        let method = parts[0]
-        let path = parts[1]
-
-        // Extract body (after \r\n\r\n)
-        var body: Data?
-        if let range = requestStr.range(of: "\r\n\r\n") {
-            let bodyStr = String(requestStr[range.upperBound...])
-            if !bodyStr.isEmpty {
-                body = Data(bodyStr.utf8)
-            }
-        }
-
-        // Route request
-        let responseBody: String
-        do {
-            responseBody = try await routeRequest(method: method, path: path, body: body)
-        } catch {
-            let escapedError = error.localizedDescription
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
-            let errorJson = "{\"error\": \"\(escapedError)\"}"
-            sendHTTPResponse(fd: fd, statusCode: 500, body: errorJson)
-            return
-        }
-
-        sendHTTPResponse(fd: fd, statusCode: 200, body: responseBody)
+        return address
     }
 
-    /// Route MCP requests to handlers
-    private func routeRequest(method: String, path: String, body: Data?) async throws -> String {
-        // MCP Streamable HTTP transport — handle JSON-RPC messages
-        if path == "/mcp" && method == "POST" {
-            guard let body else { throw MCPError.missingBody }
-            return try await handleMCPRequest(body)
-        }
-
-        return "{\"error\": \"Not found\"}"
+    private func removeSocketFile() {
+        try? FileManager.default.removeItem(at: BlitzPaths.mcpSocket)
     }
 
-    /// Handle MCP JSON-RPC request
-    private func handleMCPRequest(_ body: Data) async throws -> String {
-        guard let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
-              let methodName = json["method"] as? String else {
-            throw MCPError.invalidRequest
+    private func processMCPLine(_ line: String) async -> String? {
+        guard let body = line.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+            return errorResponse(id: NSNull(), code: -32700, message: "Invalid MCP JSON.")
         }
 
-        // Notifications (method starts with "notifications/") have no id and
-        // expect no response per JSON-RPC 2.0.  Accept them gracefully.
+        guard let methodName = json["method"] as? String else {
+            return errorResponse(id: json["id"] ?? NSNull(), code: -32600, message: "Invalid MCP request.")
+        }
+
         let id: Any = json["id"] ?? NSNull()
-        let isNotification = methodName.hasPrefix("notifications/")
-
+        let hasResponseID = json["id"] != nil
+        let isNotification = !hasResponseID || methodName.hasPrefix("notifications/")
         let params = json["params"] as? [String: Any] ?? [:]
 
         let result: Any
         switch methodName {
         case "initialize":
+            let clientVersion = params["protocolVersion"] as? String ?? "2024-11-05"
             result = [
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": clientVersion,
                 "capabilities": [
                     "tools": ["listChanged": false]
                 ],
@@ -223,8 +231,7 @@ actor MCPServerService {
             ] as [String: Any]
 
         case "notifications/initialized":
-            // Client acknowledgment — return empty result
-            result = [:] as [String: Any]
+            return nil
 
         case "tools/list":
             result = [
@@ -237,91 +244,72 @@ actor MCPServerService {
             do {
                 result = try await toolExecutor.execute(name: toolName, arguments: toolArgs)
             } catch {
-                // Return a proper JSON-RPC error response instead of letting the error
-                // propagate to the HTTP layer (which sends a non-JSON-RPC 500 body)
-                let errorResponse: [String: Any] = [
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "error": [
-                        "code": -32603,
-                        "message": error.localizedDescription
-                    ] as [String: Any]
-                ]
-                let data = try JSONSerialization.data(withJSONObject: errorResponse)
-                return String(data: data, encoding: .utf8) ?? "{}"
+                return errorResponse(id: id, code: -32603, message: error.localizedDescription)
             }
 
         default:
-            if isNotification {
-                // Unknown notification — accept silently
-                result = [:] as [String: Any]
-            } else {
-                throw MCPError.unknownMethod(methodName)
-            }
+            if isNotification { return nil }
+            return errorResponse(id: id, code: -32601, message: "Unknown MCP method: \(methodName)")
         }
+
+        if isNotification { return nil }
 
         let response: [String: Any] = [
             "jsonrpc": "2.0",
             "id": id,
             "result": result
         ]
-
-        let data = try JSONSerialization.data(withJSONObject: response)
-        return String(data: data, encoding: .utf8) ?? "{}"
-    }
-
-    /// Send HTTP response
-    private func sendHTTPResponse(fd: Int32, statusCode: Int, body: String) {
-        let statusText = statusCode == 200 ? "OK" : "Error"
-        let response = """
-        HTTP/1.1 \(statusCode) \(statusText)\r
-        Content-Type: application/json\r
-        Content-Length: \(body.utf8.count)\r
-        Connection: close\r
-        \r
-        \(body)
-        """
-        let data = Data(response.utf8)
-        data.withUnsafeBytes { buf in
-            _ = send(fd, buf.baseAddress!, buf.count, 0)
+        guard let data = try? JSONSerialization.data(withJSONObject: response),
+              let json = String(data: data, encoding: .utf8) else {
+            return errorResponse(id: id, code: -32603, message: "Failed to encode MCP response.")
         }
+        return json
     }
 
-    // MARK: - Port File
-
-    private func writePortFile(port: Int) {
-        let url = Self.portFileURL
-        let dir = url.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try? "\(port)".write(to: url, atomically: true, encoding: .utf8)
-    }
-
-    private func removePortFile() {
-        try? FileManager.default.removeItem(at: Self.portFileURL)
+    private func errorResponse(id: Any, code: Int, message: String) -> String {
+        let payload: [String: Any] = [
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": [
+                "code": code,
+                "message": message
+            ] as [String: Any]
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else {
+            return #"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"MCP error."}}"#
+        }
+        return json
     }
 
     enum MCPError: Error, LocalizedError {
-        case noPortAvailable
         case socketCreationFailed
-        case bindFailed
-        case listenFailed
-        case missingBody
-        case invalidRequest
-        case unknownMethod(String)
+        case bindFailed(code: Int32)
+        case listenFailed(code: Int32)
+        case invalidSocketPath
+        case readFailed(code: Int32)
+        case writeFailed(code: Int32)
         case unknownTool(String)
         case invalidToolArgs
 
         var errorDescription: String? {
             switch self {
-            case .noPortAvailable: return "No port available for MCP server"
-            case .socketCreationFailed: return "Failed to create MCP server socket"
-            case .bindFailed: return "Failed to bind MCP server port"
-            case .listenFailed: return "Failed to listen on MCP server port"
-            case .missingBody: return "Missing request body"
-            case .invalidRequest: return "Invalid MCP request"
-            case .unknownMethod(let m): return "Unknown MCP method: \(m)"
-            case .unknownTool(let t): return "Unknown MCP tool: \(t)"
-            case .invalidToolArgs: return "Invalid tool arguments"
+            case .socketCreationFailed:
+                return "Failed to create the Blitz MCP socket."
+            case .bindFailed(let code):
+                return "Failed to bind Blitz MCP socket (\(code))."
+            case .listenFailed(let code):
+                return "Failed to listen on Blitz MCP socket (\(code))."
+            case .invalidSocketPath:
+                return "Invalid Blitz MCP socket path."
+            case .readFailed(let code):
+                return "Failed to read from Blitz MCP socket (\(code))."
+            case .writeFailed(let code):
+                return "Failed to write to Blitz MCP socket (\(code))."
+            case .unknownTool(let tool):
+                return "Unknown MCP tool: \(tool)"
+            case .invalidToolArgs:
+                return "Invalid tool arguments."
             }
         }
     }
