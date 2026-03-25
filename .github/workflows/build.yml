@@ -186,7 +186,9 @@ jobs:
 
       - name: Get version
         id: version
-        run: echo "version=$(node -e "process.stdout.write(require('./package.json').version)")" >> "$GITHUB_OUTPUT"
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Extract changelog notes
         id: changelog
@@ -288,7 +290,9 @@ jobs:
 
       - name: Get version
         id: version
-        run: echo "version=$(node -e "process.stdout.write(require('./package.json').version)")" >> "$GITHUB_OUTPUT"
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Build x86_64 .app artifact
         env:
