@@ -128,7 +128,9 @@ struct ScreenshotsView: View {
                 }
             }
         }
-        .task(id: appState.activeProjectId) { await loadData() }
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
+            await loadData()
+        }
         .onChange(of: selectedDevice) { _, _ in loadTrackForDevice() }
         .alert("Import Error", isPresented: Binding(
             get: { importError != nil },

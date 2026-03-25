@@ -24,7 +24,9 @@ struct AnalyticsView: View {
                 analyticsContent
             }
         }
-        .task(id: appState.activeProjectId) { await asc.ensureTabData(.analytics) }
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
+            await asc.ensureTabData(.analytics)
+        }
     }
 
     @ViewBuilder

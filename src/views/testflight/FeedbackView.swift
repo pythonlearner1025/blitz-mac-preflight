@@ -17,7 +17,9 @@ struct FeedbackView: View {
                 feedbackContent
             }
         }
-        .task(id: appState.activeProjectId) { await asc.ensureTabData(.feedback) }
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
+            await asc.ensureTabData(.feedback)
+        }
     }
 
     @ViewBuilder

@@ -54,7 +54,9 @@ struct AppDetailsView: View {
                 detailsContent
             }
         }
-        .task(id: appState.activeProjectId) { await asc.ensureTabData(.appDetails) }
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
+            await asc.ensureTabData(.appDetails)
+        }
     }
 
     @ViewBuilder

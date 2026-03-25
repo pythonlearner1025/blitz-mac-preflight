@@ -160,6 +160,7 @@ var settingsStore = SettingsService.shared
     init() {
         // Boot MCP server eagerly — this runs before any SwiftUI view callback
         MCPBootstrap.shared.boot(appState: self)
+        ascManager.loadStoredCredentialsIfNeeded()
     }
 
     var activeProject: Project? {

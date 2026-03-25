@@ -17,7 +17,9 @@ struct BuildsView: View {
                 buildsContent
             }
         }
-        .task(id: appState.activeProjectId) { await asc.ensureTabData(.builds) }
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
+            await asc.ensureTabData(.builds)
+        }
         .onAppear { syncSelectedBuild() }
         .onChange(of: asc.builds.map(\.id)) { _, _ in syncSelectedBuild() }
     }

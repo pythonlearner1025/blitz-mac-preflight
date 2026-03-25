@@ -2,8 +2,17 @@ import SwiftUI
 
 struct DashboardView: View {
     @Bindable var appState: AppState
+    @State private var dashboardSummary = DashboardSummaryStore.shared
 
     private var projects: [Project] { appState.projectManager.projects }
+    private var summaryHydrationKey: String {
+        let credentialsKey = appState.ascManager.credentials?.keyId ?? "no-creds"
+        let fingerprint = projects
+            .map { "\($0.id):\($0.metadata.bundleIdentifier ?? "")" }
+            .sorted()
+            .joined(separator: "|")
+        return "\(credentialsKey):\(appState.ascManager.credentialActivationRevision):\(fingerprint)"
+    }
 
     var body: some View {
         ScrollView {
@@ -13,9 +22,24 @@ struct DashboardView: View {
                     columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())],
                     spacing: 12
                 ) {
-                    statCard(title: "Live on Store", value: "\(liveCount)", color: .green, icon: "checkmark.seal.fill")
-                    statCard(title: "Pending Review", value: "\(pendingCount)", color: .orange, icon: "clock.fill")
-                    statCard(title: "Rejected Apps", value: "\(rejectedCount)", color: .red, icon: "xmark.seal.fill")
+                    statCard(
+                        title: "Live on Store",
+                        value: statValue(dashboardSummary.summary.liveCount),
+                        color: .green,
+                        icon: "checkmark.seal.fill"
+                    )
+                    statCard(
+                        title: "Pending Review",
+                        value: statValue(dashboardSummary.summary.pendingCount),
+                        color: .orange,
+                        icon: "clock.fill"
+                    )
+                    statCard(
+                        title: "Rejected Apps",
+                        value: statValue(dashboardSummary.summary.rejectedCount),
+                        color: .red,
+                        icon: "xmark.seal.fill"
+                    )
                 }
 
                 // App grid header
@@ -54,10 +78,17 @@ struct DashboardView: View {
             .controlSize(.large)
             .padding(20)
         }
-        .task {
-            if projects.isEmpty {
-                await appState.projectManager.loadProjects()
+        .overlay(alignment: .topTrailing) {
+            if dashboardSummary.isLoadingSummary {
+                ProgressView()
+                    .controlSize(.small)
+                    .padding(12)
+                    .background(.background.secondary, in: Capsule())
+                    .padding(20)
             }
+        }
+        .task(id: summaryHydrationKey) {
+            await hydrateSummary()
         }
     }
 
@@ -102,9 +133,8 @@ struct DashboardView: View {
                 .font(.callout.weight(.medium))
                 .lineLimit(1)
 
-            Text(project.metadata.bundleIdentifier ?? project.type.rawValue)
+            statusLabel(for: project)
                 .font(.caption2)
-                .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
         .padding(14)
@@ -128,22 +158,96 @@ struct DashboardView: View {
         }
     }
 
-    // MARK: - Stats (placeholder counts from project metadata)
+    private func hydrateSummary() async {
+        if projects.isEmpty {
+            await appState.projectManager.loadProjects()
+        }
 
-    private var liveCount: Int {
-        // Placeholder — real implementation would query ASC per project
-        0
-    }
+        let hydrationKey = summaryHydrationKey
+        if dashboardSummary.isLoading(for: hydrationKey) || !dashboardSummary.shouldRefresh(for: hydrationKey) {
+            return
+        }
 
-    private var pendingCount: Int {
-        0
-    }
+        let eligibleProjects = appState.projectManager.projects.compactMap { project -> DashboardProjectInput? in
+            guard let bundleId = project.metadata.bundleIdentifier?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !bundleId.isEmpty else {
+                return nil
+            }
+            return DashboardProjectInput(bundleId: bundleId)
+        }
 
-    private var rejectedCount: Int {
-        0
+        guard !eligibleProjects.isEmpty else {
+            dashboardSummary.markEmpty(for: hydrationKey)
+            return
+        }
+
+        guard let credentials = ASCCredentials.load() else {
+            dashboardSummary.markUnavailable(for: hydrationKey)
+            return
+        }
+
+        dashboardSummary.beginLoading(for: hydrationKey)
+        var nextSummary = ASCDashboardSummary.empty
+        var nextStatuses: [String: ASCDashboardProjectStatus] = [:]
+        let service = AppStoreConnectService(credentials: credentials)
+
+        for project in eligibleProjects {
+            if Task.isCancelled {
+                dashboardSummary.cancelLoading(for: hydrationKey)
+                return
+            }
+
+            do {
+                let app = try await service.fetchApp(bundleId: project.bundleId)
+                let versions = try await service.fetchAppStoreVersions(appId: app.id)
+                let status = ASCDashboardProjectStatus(versions: versions)
+                nextSummary.include(status)
+                nextStatuses[project.bundleId] = status
+            } catch {
+                continue
+            }
+        }
+
+        if Task.isCancelled {
+            dashboardSummary.cancelLoading(for: hydrationKey)
+            return
+        }
+
+        dashboardSummary.store(summary: nextSummary, projectStatuses: nextStatuses, for: hydrationKey)
     }
 
     // MARK: - Helpers
+
+    private func statValue(_ count: Int) -> String {
+        dashboardSummary.hasLoadedSummary ? "\(count)" : (projects.isEmpty ? "0" : "-")
+    }
+
+    @ViewBuilder
+    private func statusLabel(for project: Project) -> some View {
+        let bundleId = project.metadata.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if let status = dashboardSummary.projectStatuses[bundleId] {
+            if status.isRejected {
+                Label("Rejected", systemImage: "xmark.circle.fill")
+                    .foregroundStyle(.red)
+            } else if status.isPendingReview {
+                Label("In Review", systemImage: "clock.fill")
+                    .foregroundStyle(.orange)
+            } else if status.isLiveOnStore {
+                Label("Live", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            } else {
+                Label("Preparing", systemImage: "pencil.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+        } else if dashboardSummary.hasLoadedSummary || bundleId.isEmpty {
+            Text(project.type.rawValue)
+                .foregroundStyle(.secondary)
+        } else {
+            Text(bundleId)
+                .foregroundStyle(.secondary)
+        }
+    }
 
     private func projectIcon(_ project: Project) -> String {
         if project.platform == .macOS { return "desktopcomputer" }
@@ -160,5 +264,9 @@ struct DashboardView: View {
         case .swift: return .orange
         case .flutter: return .blue
         }
+    }
+
+    private struct DashboardProjectInput: Sendable {
+        let bundleId: String
     }
 }

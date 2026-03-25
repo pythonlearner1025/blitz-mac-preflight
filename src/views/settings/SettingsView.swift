@@ -119,9 +119,7 @@ struct SettingsView: View {
                 titleVisibility: .visible
             ) {
                 Button("Clear Credentials", role: .destructive) {
-                    if let projectId = appState.ascManager.loadedProjectId {
-                        appState.ascManager.deleteCredentials(projectId: projectId)
-                    }
+                    appState.ascManager.deleteCredentials()
                 }
             } message: {
                 Text("This action cannot be undone. You will need to re-enter your API credentials to access App Store Connect data.")
@@ -140,6 +138,7 @@ struct SettingsView: View {
         .frame(maxWidth: 500)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
+            appState.ascManager.loadStoredCredentialsIfNeeded()
             refreshTerminalResetWarning()
         }
         .fileImporter(

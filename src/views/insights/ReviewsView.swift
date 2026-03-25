@@ -16,7 +16,9 @@ struct ReviewsView: View {
                 reviewsContent
             }
         }
-        .task(id: appState.activeProjectId) { await asc.ensureTabData(.reviews) }
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
+            await asc.ensureTabData(.reviews)
+        }
     }
 
     @ViewBuilder

@@ -13,7 +13,7 @@ struct ASCTabContent<Content: View>: View {
     }
 
     private var shouldRenderContentWhileLoading: Bool {
-        asc.credentials != nil
+        asc.credentials != nil && asc.app != nil
     }
 
     var body: some View {

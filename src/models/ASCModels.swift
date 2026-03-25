@@ -24,11 +24,27 @@ struct ASCCredentials: Codable {
 
     static func delete() {
         try? FileManager.default.removeItem(at: credentialsURL())
+        cleanupLegacyPrivateKeys()
     }
 
     static func credentialsURL() -> URL {
         let home = FileManager.default.homeDirectoryForCurrentUser
         return home.appendingPathComponent(".blitz/asc-credentials.json")
+    }
+
+    private static func cleanupLegacyPrivateKeys() {
+        let fm = FileManager.default
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let blitzRoot = home.appendingPathComponent(".blitz")
+        guard let entries = try? fm.contentsOfDirectory(
+            at: blitzRoot,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+
+        for entry in entries where entry.lastPathComponent.hasPrefix("AuthKey_") && entry.pathExtension == "p8" {
+            try? fm.removeItem(at: entry)
+        }
     }
 }
 

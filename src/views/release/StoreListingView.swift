@@ -32,7 +32,9 @@ struct StoreListingView: View {
                 listingContent
             }
         }
-        .task(id: appState.activeProjectId) { await asc.ensureTabData(.storeListing) }
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
+            await asc.ensureTabData(.storeListing)
+        }
         .onDisappear {
             Task { await flushChanges() }
         }

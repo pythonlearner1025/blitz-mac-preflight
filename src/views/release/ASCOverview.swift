@@ -17,7 +17,7 @@ struct ASCOverview: View {
                 overviewContent
             }
         }
-        .task(id: appState.activeProjectId) {
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
             await asc.ensureTabData(.app)
         }
         .sheet(isPresented: $showPreview) {

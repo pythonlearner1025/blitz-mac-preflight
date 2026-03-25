@@ -24,7 +24,9 @@ struct BetaInfoView: View {
                 betaInfoContent
             }
         }
-        .task(id: appState.activeProjectId) { await asc.ensureTabData(.betaInfo) }
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
+            await asc.ensureTabData(.betaInfo)
+        }
     }
 
     @ViewBuilder

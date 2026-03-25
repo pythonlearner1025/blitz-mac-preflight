@@ -16,7 +16,9 @@ struct GroupsView: View {
                 groupsContent
             }
         }
-        .task(id: appState.activeProjectId) { await asc.ensureTabData(.groups) }
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
+            await asc.ensureTabData(.groups)
+        }
     }
 
     @ViewBuilder

@@ -225,6 +225,9 @@ final class ASCManager {
     var isLoadingCredentials = false
     var credentialsError: String?
     var isLoadingApp = false
+    // Bumped after saving credentials so gated ASC tabs rerun their initial load task
+    // once the credential form disappears and the app lookup has completed.
+    var credentialActivationRevision = 0
 
     // Per-tab data
     var appStoreVersions: [ASCAppStoreVersion] = []
@@ -620,6 +623,17 @@ final class ASCManager {
             snapshot.apply(to: self)
         } else {
             loadedProjectId = projectId
+        }
+    }
+
+    func loadStoredCredentialsIfNeeded() {
+        guard credentials == nil || service == nil else { return }
+        let creds = ASCCredentials.load()
+        credentials = creds
+        if let creds {
+            service = AppStoreConnectService(credentials: creds)
+        } else {
+            service = nil
         }
     }
 
@@ -1257,9 +1271,11 @@ final class ASCManager {
         if let bundleId, !bundleId.isEmpty {
             await fetchApp(bundleId: bundleId)
         }
+
+        credentialActivationRevision += 1
     }
 
-    func deleteCredentials(projectId: String) {
+    func deleteCredentials() {
         ASCCredentials.delete()
         let pid = loadedProjectId
         clearForProjectSwitch()
