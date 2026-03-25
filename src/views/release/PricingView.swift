@@ -17,7 +17,9 @@ struct MonetizationView: View {
                 monetizationContent
             }
         }
-        .task(id: appState.activeProjectId) { await asc.ensureTabData(.monetization) }
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
+            await asc.ensureTabData(.monetization)
+        }
     }
 
     @ViewBuilder
@@ -216,29 +218,46 @@ private struct AppPricingSection: View {
 
                     Divider()
 
-                    DisclosureGroup("Schedule Price Change", isExpanded: $showScheduled) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            DatePicker("Effective Date", selection: $scheduledDate, in: Date()..., displayedComponents: .date)
-                            PricePicker(pricePoints: asc.appPricePoints, selectedPointId: $scheduledPricePointId)
-
-                            if !scheduledPricePointId.isEmpty {
-                                Button("Create Price Change") {
-                                    isSaving = true
-                                    let currentId = selectedPricePointId.isEmpty ? freePointId : selectedPricePointId
-                                    let dateStr = formatDate(scheduledDate)
-                                    Task {
-                                        await asc.setScheduledAppPrice(
-                                            currentPricePointId: currentId,
-                                            futurePricePointId: scheduledPricePointId,
-                                            effectiveDate: dateStr
-                                        )
-                                        isSaving = false
-                                    }
-                                }
-                                .buttonStyle(.borderedProminent).controlSize(.small)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Button {
+                            withAnimation { showScheduled.toggle() }
+                        } label: {
+                            HStack {
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .rotationEffect(.degrees(showScheduled ? 90 : 0))
+                                    .animation(.easeInOut(duration: 0.15), value: showScheduled)
+                                Text("Schedule Price Change")
+                                Spacer()
                             }
+                            .contentShape(Rectangle())
                         }
-                        .padding(.top, 8)
+                        .buttonStyle(.plain)
+
+                        if showScheduled {
+                            VStack(alignment: .leading, spacing: 12) {
+                                DatePicker("Effective Date", selection: $scheduledDate, in: Date()..., displayedComponents: .date)
+                                PricePicker(pricePoints: asc.appPricePoints, selectedPointId: $scheduledPricePointId)
+
+                                if !scheduledPricePointId.isEmpty {
+                                    Button("Create Price Change") {
+                                        isSaving = true
+                                        let currentId = selectedPricePointId.isEmpty ? freePointId : selectedPricePointId
+                                        let dateStr = formatDate(scheduledDate)
+                                        Task {
+                                            await asc.setScheduledAppPrice(
+                                                currentPricePointId: currentId,
+                                                futurePricePointId: scheduledPricePointId,
+                                                effectiveDate: dateStr
+                                            )
+                                            isSaving = false
+                                        }
+                                    }
+                                    .buttonStyle(.borderedProminent).controlSize(.small)
+                                }
+                            }
+                            .padding(.top, 8)
+                        }
                     }
                 }
             }

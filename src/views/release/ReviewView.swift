@@ -69,7 +69,9 @@ struct ReviewView: View {
                 reviewContent
             }
         }
-        .task(id: appState.activeProjectId) { await asc.ensureTabData(.review) }
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
+            await asc.ensureTabData(.review)
+        }
         .onChange(of: asc.appStoreVersions.map(\.id)) { _, _ in
             guard let appId = asc.app?.id else { return }
             // Load cached rejection feedback for the pending version
@@ -177,30 +179,42 @@ struct ReviewView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
 
                 // Review Contact
-                DisclosureGroup(isExpanded: $contactExpanded) {
-                    reviewContactForm
-                } label: {
-                    HStack {
-                        Text("Review Contact")
-                            .font(.headline)
-                        Spacer()
-                        if let rd = asc.reviewDetail,
-                           rd.attributes.contactFirstName != nil {
-                            Text("\(rd.attributes.contactFirstName ?? "") \(rd.attributes.contactLastName ?? "")")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        } else if isLoading {
-                            HStack(spacing: 6) {
-                                ProgressView().controlSize(.small)
-                                Text("Loading…")
+                VStack(alignment: .leading, spacing: 0) {
+                    Button {
+                        withAnimation { contactExpanded.toggle() }
+                    } label: {
+                        HStack {
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .rotationEffect(.degrees(contactExpanded ? 90 : 0))
+                                .animation(.easeInOut(duration: 0.15), value: contactExpanded)
+                            Text("Review Contact")
+                                .font(.headline)
+                            Spacer()
+                            if let rd = asc.reviewDetail,
+                               rd.attributes.contactFirstName != nil {
+                                Text("\(rd.attributes.contactFirstName ?? "") \(rd.attributes.contactLastName ?? "")")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                            } else if isLoading {
+                                HStack(spacing: 6) {
+                                    ProgressView().controlSize(.small)
+                                    Text("Loading…")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            } else {
+                                Text("Not configured")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
                             }
-                        } else {
-                            Text("Not configured")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
                         }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    if contactExpanded {
+                        reviewContactForm
                     }
                 }
                 .padding(16)
