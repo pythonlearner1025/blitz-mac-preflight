@@ -2,6 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ASCCredentialForm: View {
+    var appState: AppState
     var ascManager: ASCManager
     var projectId: String
     var bundleId: String?
@@ -155,13 +156,28 @@ struct ASCCredentialForm: View {
                         let agent = AIAgent(rawValue: settings.defaultAgentCLI) ?? .claudeCode
                         let terminal = settings.resolveDefaultTerminal().terminal
                         let prompt = "Use the /asc-team-key-create skill to create a new App Store Connect API key, then call the asc_set_credentials MCP tool to fill the form so I can verify and save."
-                        TerminalLauncher.launch(
-                            projectPath: BlitzPaths.mcps.path,
-                            agent: agent,
-                            terminal: terminal,
-                            prompt: prompt,
-                            skipPermissions: settings.skipAgentPermissions
-                        )
+
+                        if terminal.isBuiltIn {
+                            appState.showTerminal = true
+                            let session = appState.terminalManager.createSession(projectPath: BlitzPaths.mcps.path)
+                            var command = agent.cliCommand
+                            if settings.skipAgentPermissions, let flag = agent.skipPermissionsFlag {
+                                command += " \(flag)"
+                            }
+                            let escaped = prompt.replacingOccurrences(of: "'", with: "'\\''")
+                            command += " '\(escaped)'"
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                session.sendCommand(command)
+                            }
+                        } else {
+                            TerminalLauncher.launch(
+                                projectPath: BlitzPaths.mcps.path,
+                                agent: agent,
+                                terminal: terminal,
+                                prompt: prompt,
+                                skipPermissions: settings.skipAgentPermissions
+                            )
+                        }
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "sparkles")

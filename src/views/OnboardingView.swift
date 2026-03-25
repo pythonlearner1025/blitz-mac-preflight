@@ -276,6 +276,7 @@ struct OnboardingView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .toggleStyle(.switch)
                     .controlSize(.small)
@@ -290,6 +291,7 @@ struct OnboardingView: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .toggleStyle(.switch)
                 .controlSize(.small)

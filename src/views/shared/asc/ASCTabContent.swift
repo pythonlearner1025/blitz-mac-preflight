@@ -2,6 +2,7 @@ import SwiftUI
 
 /// Wraps a tab's content with loading, error, and empty-app states.
 struct ASCTabContent<Content: View>: View {
+    var appState: AppState
     var asc: ASCManager
     var tab: AppTab
     var platform: ProjectPlatform = .iOS
@@ -26,7 +27,7 @@ struct ASCTabContent<Content: View>: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if asc.app == nil && asc.credentials != nil && !isLoading {
             // App not found — show bundle ID setup instead of flashing content
-            BundleIDSetupView(asc: asc, tab: tab, platform: platform)
+            BundleIDSetupView(appState: appState, asc: asc, tab: tab, platform: platform)
         } else if let error = asc.tabError[tab], !asc.hasLoadedTabData(tab) {
             VStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle")
