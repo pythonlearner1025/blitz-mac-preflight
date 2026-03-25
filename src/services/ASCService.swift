@@ -159,9 +159,9 @@ final class AppStoreConnectService {
 
     func fetchAppStoreVersions(appId: String) async throws -> [ASCAppStoreVersion] {
         let resp = try await get("apps/\(appId)/appStoreVersions", queryItems: [
-            URLQueryItem(name: "limit", value: "20")
+            URLQueryItem(name: "limit", value: "50")
         ], as: ASCListResponse<ASCAppStoreVersion>.self)
-        return resp.data
+        return ASCReleaseStatus.sortedVersionsByRecency(resp.data)
     }
 
     // MARK: - Localizations
