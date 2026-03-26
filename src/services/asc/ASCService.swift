@@ -1291,16 +1291,48 @@ final class AppStoreConnectService {
 
     // MARK: - Fetch: AppInfoLocalization
 
-    func fetchAppInfoLocalization(appInfoId: String) async throws -> ASCAppInfoLocalization {
+    func fetchAppInfoLocalizations(appInfoId: String) async throws -> [ASCAppInfoLocalization] {
         let resp = try await get(
             "appInfos/\(appInfoId)/appInfoLocalizations",
-            queryItems: [URLQueryItem(name: "limit", value: "1")],
+            queryItems: [URLQueryItem(name: "limit", value: "200")],
             as: ASCListResponse<ASCAppInfoLocalization>.self
         )
-        guard let loc = resp.data.first else {
+        return resp.data
+    }
+
+    func fetchAppInfoLocalization(appInfoId: String) async throws -> ASCAppInfoLocalization {
+        let localizations = try await fetchAppInfoLocalizations(appInfoId: appInfoId)
+        guard let loc = localizations.first else {
             throw ASCError.notFound("AppInfoLocalization for appInfo \(appInfoId)")
         }
         return loc
+    }
+
+    func createAppInfoLocalization(
+        appInfoId: String,
+        locale: String,
+        fields: [String: String] = [:]
+    ) async throws -> ASCAppInfoLocalization {
+        var attributes = fields
+        attributes["locale"] = locale
+
+        let body: [String: Any] = [
+            "data": [
+                "type": "appInfoLocalizations",
+                "attributes": attributes,
+                "relationships": [
+                    "appInfo": [
+                        "data": [
+                            "type": "appInfos",
+                            "id": appInfoId
+                        ]
+                    ]
+                ]
+            ]
+        ]
+
+        let data = try await post(path: "appInfoLocalizations", body: body)
+        return try JSONDecoder().decode(ASCSingleResponse<ASCAppInfoLocalization>.self, from: data).data
     }
 
     // MARK: - Pricing Check

@@ -49,20 +49,22 @@ extension ASCManager {
     }
 
     /// Update a field on appInfoLocalizations (name, subtitle, privacyPolicyUrl)
-    func updateAppInfoLocalizationField(_ field: String, value: String) async {
-        guard let service else { return }
-        guard let locId = appInfoLocalization?.id else { return }
-        writeError = nil
-        // Map UI field names to API field names
-        let apiField = (field == "title") ? "name" : field
-        do {
-            try await service.patchAppInfoLocalization(id: locId, fields: [apiField: value])
-            if let infoId = appInfo?.id {
-                appInfoLocalization = try? await service.fetchAppInfoLocalization(appInfoId: infoId)
-            }
-        } catch {
-            writeError = error.localizedDescription
+    func updateAppInfoLocalizationField(_ field: String, value: String, locale: String? = nil) async {
+        let targetLocale = locale
+            ?? selectedStoreListingLocale
+            ?? appInfoLocalization?.attributes.locale
+            ?? localizations.first?.attributes.locale
+
+        guard let targetLocale else {
+            writeError = "No app info localization selected."
+            return
         }
+
+        await updateStoreListingFields(
+            versionFields: [:],
+            appInfoFields: [field: value],
+            locale: targetLocale
+        )
     }
 
     // MARK: - Age Rating
@@ -81,4 +83,3 @@ extension ASCManager {
         }
     }
 }
-

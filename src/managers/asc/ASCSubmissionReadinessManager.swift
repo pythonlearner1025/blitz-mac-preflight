@@ -20,11 +20,27 @@ extension ASCManager {
         let review = reviewDetail
         let demoRequired = review?.attributes.demoAccountRequired == true
         let version = appStoreVersions.first
+        let readinessLocale = localization?.attributes.locale
+        let readinessScreenshotSets: [ASCScreenshotSet]
+        let readinessScreenshots: [String: [ASCScreenshot]]
 
-        let macScreenshots = screenshotSets.first { $0.attributes.screenshotDisplayType == "APP_DESKTOP" }
+        if let readinessLocale,
+           let cachedSets = screenshotSetsByLocale[readinessLocale],
+           let cachedScreenshots = screenshotsByLocale[readinessLocale] {
+            readinessScreenshotSets = cachedSets
+            readinessScreenshots = cachedScreenshots
+        } else if readinessLocale == nil || activeScreenshotsLocale == readinessLocale {
+            readinessScreenshotSets = screenshotSets
+            readinessScreenshots = screenshots
+        } else {
+            readinessScreenshotSets = []
+            readinessScreenshots = [:]
+        }
+
+        let macScreenshots = readinessScreenshotSets.first { $0.attributes.screenshotDisplayType == "APP_DESKTOP" }
         let isMacApp = macScreenshots != nil
-        let iphoneScreenshots = screenshotSets.first { $0.attributes.screenshotDisplayType == "APP_IPHONE_67" }
-        let ipadScreenshots = screenshotSets.first { $0.attributes.screenshotDisplayType == "APP_IPAD_PRO_3GEN_129" }
+        let iphoneScreenshots = readinessScreenshotSets.first { $0.attributes.screenshotDisplayType == "APP_IPHONE_67" }
+        let ipadScreenshots = readinessScreenshotSets.first { $0.attributes.screenshotDisplayType == "APP_IPAD_PRO_3GEN_129" }
 
         let privacyUrl: String? = app.map {
             "https://appstoreconnect.apple.com/apps/\($0.id)/distribution/privacy"
@@ -73,7 +89,7 @@ extension ASCManager {
 
         func validCount(for set: ASCScreenshotSet?) -> Int {
             guard let set else { return 0 }
-            if let screenshots = screenshots[set.id] {
+            if let screenshots = readinessScreenshots[set.id] {
                 return screenshots.filter { !$0.hasError }.count
             }
             return set.attributes.screenshotCount ?? 0

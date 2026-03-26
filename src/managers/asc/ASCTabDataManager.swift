@@ -124,15 +124,13 @@ extension ASCManager {
         projectId: String?,
         appId: String,
         firstLocalizationId: String?,
+        firstLocalizationLocale: String?,
         appInfoId: String?,
         service: AppStoreConnectService
     ) async {
-        if let firstLocalizationId {
+        if let firstLocalizationId, let firstLocalizationLocale {
             do {
                 let fetchedSets = try await service.fetchScreenshotSets(localizationId: firstLocalizationId)
-                guard !Task.isCancelled, isCurrentProject(projectId) else { return }
-                screenshotSets = fetchedSets
-
                 let fetchedScreenshots = try await withThrowingTaskGroup(of: (String, [ASCScreenshot]).self) { group in
                     for set in fetchedSets {
                         group.addTask {
@@ -149,7 +147,11 @@ extension ASCManager {
                 }
 
                 guard !Task.isCancelled, isCurrentProject(projectId) else { return }
-                screenshots = Dictionary(uniqueKeysWithValues: fetchedScreenshots)
+                cacheScreenshots(
+                    locale: firstLocalizationLocale,
+                    sets: fetchedSets,
+                    screenshots: Dictionary(uniqueKeysWithValues: fetchedScreenshots)
+                )
                 finishOverviewReadinessLoading(Self.overviewScreenshotFieldLabels)
             } catch {
                 print("Failed to hydrate overview screenshots: \(error)")
@@ -193,31 +195,22 @@ extension ASCManager {
 
     private func hydrateScreenshotsSecondaryData(
         projectId: String?,
+        locale: String,
         localizationId: String,
         service: AppStoreConnectService
     ) async {
         do {
-            let fetchedSets = try await service.fetchScreenshotSets(localizationId: localizationId)
+            let (fetchedSets, fetchedScreenshots) = try await fetchScreenshotData(
+                localizationId: localizationId,
+                service: service
+            )
             guard !Task.isCancelled, isCurrentProject(projectId) else { return }
-            screenshotSets = fetchedSets
-
-            let fetchedScreenshots = try await withThrowingTaskGroup(of: (String, [ASCScreenshot]).self) { group in
-                for set in fetchedSets {
-                    group.addTask {
-                        let screenshots = try await service.fetchScreenshots(setId: set.id)
-                        return (set.id, screenshots)
-                    }
-                }
-
-                var pairs: [(String, [ASCScreenshot])] = []
-                for try await pair in group {
-                    pairs.append(pair)
-                }
-                return pairs
-            }
-
-            guard !Task.isCancelled, isCurrentProject(projectId) else { return }
-            screenshots = Dictionary(uniqueKeysWithValues: fetchedScreenshots)
+            storeScreenshots(
+                locale: locale,
+                sets: fetchedSets,
+                screenshots: fetchedScreenshots,
+                makeActive: true
+            )
         } catch {
             print("Failed to hydrate screenshots: \(error)")
         }
@@ -330,6 +323,7 @@ extension ASCManager {
             finishOverviewReadinessLoading(Self.overviewBuildFieldLabels)
 
             var firstLocalizationId: String?
+            var firstLocalizationLocale: String?
             if let latestId = versions.first?.id {
                 async let localizationsTask = service.fetchLocalizations(versionId: latestId)
                 async let reviewDetailTask: ASCReviewDetail? = try? service.fetchReviewDetail(versionId: latestId)
@@ -337,6 +331,7 @@ extension ASCManager {
                 let fetchedLocalizations = try await localizationsTask
                 localizations = fetchedLocalizations
                 firstLocalizationId = fetchedLocalizations.first?.id
+                firstLocalizationLocale = fetchedLocalizations.first?.attributes.locale
                 finishOverviewReadinessLoading(Self.overviewLocalizationFieldLabels)
                 reviewDetail = await reviewDetailTask
                 finishOverviewReadinessLoading(Self.overviewReviewFieldLabels)
@@ -356,28 +351,18 @@ extension ASCManager {
                     projectId: projectId,
                     appId: appId,
                     firstLocalizationId: firstLocalizationId,
+                    firstLocalizationLocale: firstLocalizationLocale,
                     appInfoId: currentAppInfoId,
                     service: service
                 )
             }
 
         case .storeListing:
-            async let versionsTask = service.fetchAppStoreVersions(appId: appId)
-            async let appInfoTask: ASCAppInfo? = try? await service.fetchAppInfo(appId: appId)
-
-            let versions = try await versionsTask
-            appStoreVersions = versions
-            if let latestId = versions.first?.id {
-                localizations = try await service.fetchLocalizations(versionId: latestId)
-            } else {
-                localizations = []
-            }
-            appInfo = await appInfoTask
-            if let infoId = appInfo?.id {
-                appInfoLocalization = try? await service.fetchAppInfoLocalization(appInfoId: infoId)
-            } else {
-                appInfoLocalization = nil
-            }
+            try await refreshStoreListingMetadata(
+                service: service,
+                appId: appId,
+                preferredLocale: selectedStoreListingLocale
+            )
 
         case .screenshots:
             let versions = try await service.fetchAppStoreVersions(appId: appId)
@@ -385,23 +370,38 @@ extension ASCManager {
             if let latestId = versions.first?.id {
                 let localizations = try await service.fetchLocalizations(versionId: latestId)
                 self.localizations = localizations
-                if let firstLocalizationId = localizations.first?.id {
+                let preferredLocale = selectedScreenshotsLocale ?? activeScreenshotsLocale
+                let targetLocalization = localizations.first(where: { $0.attributes.locale == preferredLocale })
+                    ?? localizations.first
+                if let targetLocalization {
+                    selectedScreenshotsLocale = targetLocalization.attributes.locale
                     let projectId = loadedProjectId
                     startBackgroundHydration(for: .screenshots) {
                         await self.hydrateScreenshotsSecondaryData(
                             projectId: projectId,
-                            localizationId: firstLocalizationId,
+                            locale: targetLocalization.attributes.locale,
+                            localizationId: targetLocalization.id,
                             service: service
                         )
                     }
                 } else {
                     screenshotSets = []
                     screenshots = [:]
+                    screenshotSetsByLocale = [:]
+                    screenshotsByLocale = [:]
+                    selectedScreenshotsLocale = nil
+                    activeScreenshotsLocale = nil
+                    lastScreenshotDataLocale = nil
                 }
             } else {
                 localizations = []
                 screenshotSets = []
                 screenshots = [:]
+                screenshotSetsByLocale = [:]
+                screenshotsByLocale = [:]
+                selectedScreenshotsLocale = nil
+                activeScreenshotsLocale = nil
+                lastScreenshotDataLocale = nil
             }
 
         case .appDetails:

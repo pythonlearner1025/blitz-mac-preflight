@@ -48,6 +48,7 @@ extension ASCManager {
         let appInfoLocFieldNames: Set<String> = ["name", "title", "subtitle", "privacyPolicyUrl"]
         for (tab, fields) in pendingFormValues {
             if tab == "storeListing" {
+                let locale = effectiveStoreListingLocale()
                 var versionLocFields: [String: String] = [:]
                 var infoLocFields: [String: String] = [:]
                 for (field, value) in fields {
@@ -58,10 +59,10 @@ extension ASCManager {
                         versionLocFields[field] = value
                     }
                 }
-                if !versionLocFields.isEmpty, let locId = localizations.first?.id {
+                if !versionLocFields.isEmpty, let locId = storeListingLocalization(locale: locale)?.id {
                     try? await service.patchLocalization(id: locId, fields: versionLocFields)
                 }
-                if !infoLocFields.isEmpty, let infoLocId = appInfoLocalization?.id {
+                if !infoLocFields.isEmpty, let infoLocId = appInfoLocalizationForLocale(locale)?.id {
                     try? await service.patchAppInfoLocalization(id: infoLocId, fields: infoLocFields)
                 }
             }
@@ -80,4 +81,3 @@ extension ASCManager {
         }?.id ?? appStoreVersions.first?.id
     }
 }
-

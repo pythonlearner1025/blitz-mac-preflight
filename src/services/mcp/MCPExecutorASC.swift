@@ -30,6 +30,109 @@ extension MCPExecutor {
         "phone": "contactPhone",
     ]
 
+    private func screenshotsDisplayTypesForActiveProject() async -> [String] {
+        await MainActor.run {
+            switch appState.activeProject?.platform ?? .iOS {
+            case .iOS:
+                return ["APP_IPHONE_67", "APP_IPAD_PRO_3GEN_129"]
+            case .macOS:
+                return ["APP_DESKTOP"]
+            }
+        }
+    }
+
+    private func resolveStoreListingLocale(from args: [String: Any]) async -> String {
+        if let requestedLocale = (args["locale"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !requestedLocale.isEmpty {
+            return requestedLocale
+        }
+
+        return await MainActor.run {
+            appState.ascManager.selectedStoreListingLocale
+                ?? appState.ascManager.localizations.first?.attributes.locale
+                ?? "en-US"
+        }
+    }
+
+    private func prepareStoreListingLocale(
+        _ locale: String,
+        forceRefresh: Bool = false
+    ) async -> String? {
+        let trimmedLocale = locale.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedLocale.isEmpty else {
+            return "Error: locale is required."
+        }
+
+        let needsRefresh = await MainActor.run { () -> Bool in
+            let asc = appState.ascManager
+            asc.selectedStoreListingLocale = trimmedLocale
+            return forceRefresh
+                || asc.localizations.isEmpty
+                || !asc.localizations.contains(where: { $0.attributes.locale == trimmedLocale })
+                || asc.appInfoLocalizationsByLocale.isEmpty
+        }
+
+        if needsRefresh {
+            await appState.ascManager.refreshTabData(.storeListing)
+        }
+
+        let availableLocales = await MainActor.run {
+            appState.ascManager.localizations.map(\.attributes.locale).sorted()
+        }
+        guard availableLocales.contains(trimmedLocale) else {
+            let availableText = availableLocales.isEmpty ? "none" : availableLocales.joined(separator: ", ")
+            return "Error: store listing localization '\(trimmedLocale)' was not found after refreshing from ASC. "
+                + "Available localizations: \(availableText)"
+        }
+
+        await MainActor.run {
+            appState.ascManager.selectedStoreListingLocale = trimmedLocale
+        }
+        return nil
+    }
+
+    private func resolveScreenshotsLocale(from args: [String: Any]) async -> (locale: String, explicitlyRequested: Bool) {
+        if let requestedLocale = (args["locale"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !requestedLocale.isEmpty {
+            return (requestedLocale, true)
+        }
+
+        let locale = await MainActor.run {
+            appState.ascManager.selectedScreenshotsLocale
+                ?? appState.ascManager.activeScreenshotsLocale
+                ?? appState.ascManager.localizations.first?.attributes.locale
+                ?? "en-US"
+        }
+        return (locale, false)
+    }
+
+    private func validateScreenshotsLocaleSelection(
+        locale: String,
+        explicitlyRequested: Bool
+    ) async -> String? {
+        await MainActor.run {
+            guard explicitlyRequested else { return nil }
+            let selectedLocale = appState.ascManager.selectedScreenshotsLocale
+            guard selectedLocale == locale else {
+                return "Error: screenshots locale '\(locale)' is not selected in Blitz. "
+                    + "Call screenshots_switch_localization first."
+            }
+            return nil
+        }
+    }
+
+    private func prepareScreenshotsTrackIfNeeded(displayType: String, locale: String) async {
+        await MainActor.run {
+            let asc = appState.ascManager
+            if !asc.hasTrackState(displayType: displayType, locale: locale),
+               asc.selectedScreenshotsLocale == locale || asc.activeScreenshotsLocale == locale {
+                asc.loadTrackFromASC(displayType: displayType, locale: locale)
+            }
+        }
+    }
+
     func executeASCSetCredentials(_ args: [String: Any]) async -> [String: Any] {
         guard let issuerId = args["issuerId"] as? String,
               let keyId = args["keyId"] as? String,
@@ -115,41 +218,27 @@ extension MCPExecutor {
             let appInfoLocFields: Set<String> = ["name", "title", "subtitle", "privacyPolicyUrl"]
             var versionLocFields: [String: String] = [:]
             var infoLocFields: [String: String] = [:]
+            let locale = await resolveStoreListingLocale(from: args)
+
+            if let localeError = await prepareStoreListingLocale(locale) {
+                _ = await MainActor.run { appState.ascManager.pendingFormValues.removeValue(forKey: tab) }
+                return mcpText(localeError)
+            }
 
             for (field, value) in fieldMap {
                 if appInfoLocFields.contains(field) {
-                    let apiField = (field == "title") ? "name" : field
-                    infoLocFields[apiField] = value
+                    infoLocFields[field] = value
                 } else {
                     versionLocFields[field] = value
                 }
             }
 
-            if !infoLocFields.isEmpty {
-                for (field, value) in infoLocFields {
-                    await appState.ascManager.updateAppInfoLocalizationField(field, value: value)
-                }
-                if let err = await checkASCWriteError(tab: tab) { return err }
-            }
-
-            if !versionLocFields.isEmpty {
-                guard let locId = await MainActor.run(body: { appState.ascManager.localizations.first?.id }) else {
-                    return mcpText("Error: no version localizations found.")
-                }
-                do {
-                    guard let service = await MainActor.run(body: { appState.ascManager.service }) else {
-                        return mcpText("Error: ASC service not configured")
-                    }
-                    try await service.patchLocalization(id: locId, fields: versionLocFields)
-                    if let versionId = await MainActor.run(body: { appState.ascManager.appStoreVersions.first?.id }) {
-                        let localizations = try await service.fetchLocalizations(versionId: versionId)
-                        await MainActor.run { appState.ascManager.localizations = localizations }
-                    }
-                } catch {
-                    _ = await MainActor.run { appState.ascManager.pendingFormValues.removeValue(forKey: tab) }
-                    return mcpText("Error: \(error.localizedDescription)")
-                }
-            }
+            await appState.ascManager.updateStoreListingFields(
+                versionFields: versionLocFields,
+                appInfoFields: infoLocFields,
+                locale: locale
+            )
+            if let err = await checkASCWriteError(tab: tab) { return err }
 
         case "appDetails":
             for (field, value) in fieldMap {
@@ -226,7 +315,53 @@ extension MCPExecutor {
         }
 
         _ = await MainActor.run { appState.ascManager.pendingFormValues.removeValue(forKey: tab) }
-        return mcpJSON(["success": true, "tab": tab, "fieldsUpdated": fieldMap.count])
+        var response: [String: Any] = ["success": true, "tab": tab, "fieldsUpdated": fieldMap.count]
+        if tab == "storeListing" {
+            response["locale"] = await resolveStoreListingLocale(from: args)
+        }
+        return mcpJSON(response)
+    }
+
+    func executeStoreListingSwitchLocalization(_ args: [String: Any]) async throws -> [String: Any] {
+        guard let rawLocale = args["locale"] as? String else {
+            throw MCPServerService.MCPError.invalidToolArgs
+        }
+
+        let locale = rawLocale.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !locale.isEmpty else {
+            throw MCPServerService.MCPError.invalidToolArgs
+        }
+
+        if let localeError = await prepareStoreListingLocale(locale, forceRefresh: true) {
+            return mcpText(localeError)
+        }
+
+        let state = await MainActor.run { () -> [String: Any] in
+            let asc = appState.ascManager
+            let versionLocalization = asc.storeListingLocalization(locale: locale)
+            let appInfoLocalization = asc.appInfoLocalizationForLocale(locale)
+            let fields: [String: String] = [
+                "name": appInfoLocalization?.attributes.name ?? versionLocalization?.attributes.title ?? "",
+                "subtitle": appInfoLocalization?.attributes.subtitle ?? versionLocalization?.attributes.subtitle ?? "",
+                "description": versionLocalization?.attributes.description ?? "",
+                "keywords": versionLocalization?.attributes.keywords ?? "",
+                "promotionalText": versionLocalization?.attributes.promotionalText ?? "",
+                "marketingUrl": versionLocalization?.attributes.marketingUrl ?? "",
+                "supportUrl": versionLocalization?.attributes.supportUrl ?? "",
+                "whatsNew": versionLocalization?.attributes.whatsNew ?? "",
+                "privacyPolicyUrl": appInfoLocalization?.attributes.privacyPolicyUrl ?? ""
+            ]
+            var response: [String: Any] = [
+                "success": true,
+                "locale": locale,
+                "availableLocales": asc.localizations.map(\.attributes.locale).sorted(),
+                "hasAppInfoLocalization": appInfoLocalization != nil
+            ]
+            response["fields"] = fields
+            return response
+        }
+
+        return mcpJSON(state)
     }
 
     func executeScreenshotsAddAsset(_ args: [String: Any]) async throws -> [String: Any] {
@@ -262,6 +397,60 @@ extension MCPExecutor {
         return mcpJSON(["success": true, "fileName": fileName])
     }
 
+    func executeScreenshotsSwitchLocalization(_ args: [String: Any]) async throws -> [String: Any] {
+        guard let rawLocale = args["locale"] as? String else {
+            throw MCPServerService.MCPError.invalidToolArgs
+        }
+        let locale = rawLocale.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !locale.isEmpty else {
+            throw MCPServerService.MCPError.invalidToolArgs
+        }
+
+        let previousLocale = await MainActor.run {
+            let previous = appState.ascManager.selectedScreenshotsLocale
+            appState.ascManager.selectedScreenshotsLocale = locale
+            return previous
+        }
+
+        await appState.ascManager.refreshTabData(.screenshots)
+
+        let availableLocales = await MainActor.run {
+            appState.ascManager.localizations.map(\.attributes.locale).sorted()
+        }
+        guard availableLocales.contains(locale) else {
+            await MainActor.run {
+                appState.ascManager.selectedScreenshotsLocale = previousLocale
+            }
+            let availableText = availableLocales.isEmpty ? "none" : availableLocales.joined(separator: ", ")
+            return mcpText(
+                "Error: screenshot localization '\(locale)' was not found after refreshing from ASC. "
+                    + "Available localizations: \(availableText)"
+            )
+        }
+
+        await appState.ascManager.loadScreenshots(locale: locale, force: true)
+
+        let displayTypes = await screenshotsDisplayTypesForActiveProject()
+        let trackCounts = await MainActor.run { () -> [String: Int] in
+            var counts: [String: Int] = [:]
+            for displayType in displayTypes {
+                appState.ascManager.loadTrackFromASC(displayType: displayType, locale: locale)
+                counts[displayType] = appState.ascManager
+                    .trackSlotsForDisplayType(displayType, locale: locale)
+                    .compactMap { $0 }
+                    .count
+            }
+            return counts
+        }
+
+        return mcpJSON([
+            "success": true,
+            "locale": locale,
+            "availableLocales": availableLocales,
+            "trackCounts": trackCounts
+        ])
+    }
+
     func executeScreenshotsSetTrack(_ args: [String: Any]) async throws -> [String: Any] {
         guard let assetFileName = args["assetFileName"] as? String else {
             throw MCPServerService.MCPError.invalidToolArgs
@@ -272,6 +461,14 @@ extension MCPExecutor {
         }
         let slotIndex = slotRaw - 1
         let displayType = args["displayType"] as? String ?? "APP_IPHONE_67"
+        let (locale, explicitlyRequestedLocale) = await resolveScreenshotsLocale(from: args)
+
+        if let selectionError = await validateScreenshotsLocaleSelection(
+            locale: locale,
+            explicitlyRequested: explicitlyRequestedLocale
+        ) {
+            return mcpText(selectionError)
+        }
 
         guard let projectId = await MainActor.run(body: { appState.activeProjectId }) else {
             return mcpText("Error: no active project")
@@ -284,22 +481,58 @@ extension MCPExecutor {
             return mcpText("Error: asset '\(assetFileName)' not found in local screenshots library")
         }
 
+        await prepareScreenshotsTrackIfNeeded(displayType: displayType, locale: locale)
+        let trackReady = await MainActor.run {
+            appState.ascManager.hasTrackState(displayType: displayType, locale: locale)
+        }
+        guard trackReady else {
+            return mcpText(
+                "Error: screenshot locale '\(locale)' is not prepared in Blitz. "
+                    + "Call screenshots_switch_localization first."
+            )
+        }
+
         let error = await MainActor.run {
-            appState.ascManager.addAssetToTrack(displayType: displayType, slotIndex: slotIndex, localPath: filePath)
+            appState.ascManager.addAssetToTrack(
+                displayType: displayType,
+                slotIndex: slotIndex,
+                localPath: filePath,
+                locale: locale
+            )
         }
         if let error {
             return mcpText("Error: \(error)")
         }
-        return mcpJSON(["success": true, "slot": slotRaw])
+        return mcpJSON(["success": true, "slot": slotRaw, "locale": locale])
     }
 
     func executeScreenshotsSave(_ args: [String: Any]) async throws -> [String: Any] {
         let displayType = args["displayType"] as? String ?? "APP_IPHONE_67"
-        let locale = args["locale"] as? String ?? "en-US"
+        let (locale, explicitlyRequestedLocale) = await resolveScreenshotsLocale(from: args)
 
-        let hasChanges = await MainActor.run { appState.ascManager.hasUnsavedChanges(displayType: displayType) }
+        if let selectionError = await validateScreenshotsLocaleSelection(
+            locale: locale,
+            explicitlyRequested: explicitlyRequestedLocale
+        ) {
+            return mcpText(selectionError)
+        }
+
+        await prepareScreenshotsTrackIfNeeded(displayType: displayType, locale: locale)
+        let trackReady = await MainActor.run {
+            appState.ascManager.hasTrackState(displayType: displayType, locale: locale)
+        }
+        guard trackReady else {
+            return mcpText(
+                "Error: screenshot locale '\(locale)' is not prepared in Blitz. "
+                    + "Call screenshots_switch_localization first."
+            )
+        }
+
+        let hasChanges = await MainActor.run {
+            appState.ascManager.hasUnsavedChanges(displayType: displayType, locale: locale)
+        }
         guard hasChanges else {
-            return mcpJSON(["success": true, "message": "No changes to save"])
+            return mcpJSON(["success": true, "message": "No changes to save", "locale": locale])
         }
 
         await appState.ascManager.syncTrackToASC(displayType: displayType, locale: locale)
@@ -307,9 +540,9 @@ extension MCPExecutor {
         if let err = await checkASCWriteError(tab: "screenshots") { return err }
 
         let slotCount = await MainActor.run {
-            (appState.ascManager.trackSlots[displayType] ?? []).compactMap { $0 }.count
+            appState.ascManager.trackSlotsForDisplayType(displayType, locale: locale).compactMap { $0 }.count
         }
-        return mcpJSON(["success": true, "synced": slotCount])
+        return mcpJSON(["success": true, "synced": slotCount, "locale": locale])
     }
 
     func executeASCOpenSubmitPreview() async -> [String: Any] {

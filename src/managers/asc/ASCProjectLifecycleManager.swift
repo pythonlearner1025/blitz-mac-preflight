@@ -6,8 +6,17 @@ extension ASCManager {
         let app: ASCApp?
         let appStoreVersions: [ASCAppStoreVersion]
         let localizations: [ASCVersionLocalization]
+        let selectedStoreListingLocale: String?
+        let appInfoLocalizationsByLocale: [String: ASCAppInfoLocalization]
+        let storeListingDataRevision: Int
         let screenshotSets: [ASCScreenshotSet]
         let screenshots: [String: [ASCScreenshot]]
+        let screenshotSetsByLocale: [String: [ASCScreenshotSet]]
+        let screenshotsByLocale: [String: [String: [ASCScreenshot]]]
+        let selectedScreenshotsLocale: String?
+        let activeScreenshotsLocale: String?
+        let lastScreenshotDataLocale: String?
+        let screenshotDataRevision: Int
         let customerReviews: [ASCCustomerReview]
         let builds: [ASCBuild]
         let betaGroups: [ASCBetaGroup]
@@ -48,8 +57,17 @@ extension ASCManager {
             app = manager.app
             appStoreVersions = manager.appStoreVersions
             localizations = manager.localizations
+            selectedStoreListingLocale = manager.selectedStoreListingLocale
+            appInfoLocalizationsByLocale = manager.appInfoLocalizationsByLocale
+            storeListingDataRevision = manager.storeListingDataRevision
             screenshotSets = manager.screenshotSets
             screenshots = manager.screenshots
+            screenshotSetsByLocale = manager.screenshotSetsByLocale
+            screenshotsByLocale = manager.screenshotsByLocale
+            selectedScreenshotsLocale = manager.selectedScreenshotsLocale
+            activeScreenshotsLocale = manager.activeScreenshotsLocale
+            lastScreenshotDataLocale = manager.lastScreenshotDataLocale
+            screenshotDataRevision = manager.screenshotDataRevision
             customerReviews = manager.customerReviews
             builds = manager.builds
             betaGroups = manager.betaGroups
@@ -91,8 +109,17 @@ extension ASCManager {
             manager.app = app
             manager.appStoreVersions = appStoreVersions
             manager.localizations = localizations
+            manager.selectedStoreListingLocale = selectedStoreListingLocale
+            manager.appInfoLocalizationsByLocale = appInfoLocalizationsByLocale
+            manager.storeListingDataRevision = storeListingDataRevision
             manager.screenshotSets = screenshotSets
             manager.screenshots = screenshots
+            manager.screenshotSetsByLocale = screenshotSetsByLocale
+            manager.screenshotsByLocale = screenshotsByLocale
+            manager.selectedScreenshotsLocale = selectedScreenshotsLocale
+            manager.activeScreenshotsLocale = activeScreenshotsLocale
+            manager.lastScreenshotDataLocale = lastScreenshotDataLocale
+            manager.screenshotDataRevision = screenshotDataRevision
             manager.customerReviews = customerReviews
             manager.builds = builds
             manager.betaGroups = betaGroups
@@ -307,8 +334,17 @@ extension ASCManager {
         isLoadingApp = false
         appStoreVersions = []
         localizations = []
+        selectedStoreListingLocale = nil
+        appInfoLocalizationsByLocale = [:]
+        storeListingDataRevision = 0
         screenshotSets = []
         screenshots = [:]
+        screenshotSetsByLocale = [:]
+        screenshotsByLocale = [:]
+        selectedScreenshotsLocale = nil
+        activeScreenshotsLocale = nil
+        lastScreenshotDataLocale = nil
+        screenshotDataRevision = 0
         customerReviews = []
         builds = []
         betaGroups = []
@@ -338,6 +374,9 @@ extension ASCManager {
         appIconStatus = nil
         monetizationStatus = nil
         attachedSubmissionItemIDs = []
+        trackSlots = [:]
+        savedTrackState = [:]
+        localScreenshotAssets = []
         isLoadingTab = [:]
         tabError = [:]
         loadedTabs = []

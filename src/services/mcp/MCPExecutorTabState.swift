@@ -128,8 +128,9 @@ extension MCPExecutor {
 
     @MainActor
     func tabStateStoreListing(_ asc: ASCManager) -> [String: Any] {
-        let localization = asc.localizations.first
-        let infoLoc = asc.appInfoLocalization
+        let selectedLocale = asc.selectedStoreListingLocale ?? asc.localizations.first?.attributes.locale ?? ""
+        let localization = asc.storeListingLocalization(locale: selectedLocale)
+        let infoLoc = asc.appInfoLocalizationForLocale(selectedLocale)
         let localizationState: [String: Any] = [
             "locale": localization?.attributes.locale ?? "",
             "name": infoLoc?.attributes.name ?? localization?.attributes.title ?? "",
@@ -143,8 +144,11 @@ extension MCPExecutor {
         ]
 
         return [
+            "selectedLocale": selectedLocale,
+            "availableLocales": asc.localizations.map(\.attributes.locale),
             "localization": localizationState,
             "privacyPolicyUrl": infoLoc?.attributes.privacyPolicyUrl ?? "",
+            "hasAppInfoLocalization": infoLoc != nil,
             "localeCount": asc.localizations.count
         ]
     }
@@ -226,9 +230,14 @@ extension MCPExecutor {
 
     @MainActor
     func tabStateScreenshots(_ asc: ASCManager) -> [String: Any] {
-        let sets = asc.screenshotSets.map { set -> [String: Any] in
+        let selectedLocale = asc.selectedScreenshotsLocale ?? asc.activeScreenshotsLocale ?? asc.localizations.first?.attributes.locale ?? ""
+        let activeLocale = asc.activeScreenshotsLocale ?? asc.localizations.first?.attributes.locale ?? ""
+        let dataLocale = asc.screenshotSetsByLocale.keys.contains(selectedLocale) ? selectedLocale : activeLocale
+        let screenshotSets = asc.screenshotSetsByLocale[dataLocale] ?? asc.screenshotSets
+        let screenshots = asc.screenshotsByLocale[dataLocale] ?? asc.screenshots
+        let sets = screenshotSets.map { set -> [String: Any] in
             var value: [String: Any] = ["id": set.id, "displayType": set.attributes.screenshotDisplayType]
-            if let shots = asc.screenshots[set.id] {
+            if let shots = screenshots[set.id] {
                 value["screenshotCount"] = shots.count
                 value["screenshots"] = shots.map {
                     ["id": $0.id, "fileName": $0.attributes.fileName ?? ""]
@@ -236,7 +245,14 @@ extension MCPExecutor {
             }
             return value
         }
-        return ["screenshotSets": sets, "localeCount": asc.localizations.count]
+        return [
+            "selectedLocale": selectedLocale,
+            "activeLocale": activeLocale,
+            "dataLocale": dataLocale,
+            "availableLocales": asc.localizations.map(\.attributes.locale),
+            "screenshotSets": sets,
+            "localeCount": asc.localizations.count
+        ]
     }
 
     @MainActor

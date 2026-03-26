@@ -23,8 +23,17 @@ final class ASCManager {
     // Per-tab data
     var appStoreVersions: [ASCAppStoreVersion] = []
     var localizations: [ASCVersionLocalization] = []
+    var selectedStoreListingLocale: String?
+    var appInfoLocalizationsByLocale: [String: ASCAppInfoLocalization] = [:]
+    var storeListingDataRevision: Int = 0
     var screenshotSets: [ASCScreenshotSet] = []
     var screenshots: [String: [ASCScreenshot]] = [:]  // keyed by screenshotSet.id
+    var screenshotSetsByLocale: [String: [ASCScreenshotSet]] = [:]
+    var screenshotsByLocale: [String: [String: [ASCScreenshot]]] = [:]
+    var selectedScreenshotsLocale: String?
+    var activeScreenshotsLocale: String?
+    var lastScreenshotDataLocale: String?
+    var screenshotDataRevision: Int = 0
     var customerReviews: [ASCCustomerReview] = []
     var builds: [ASCBuild] = []
     var betaGroups: [ASCBetaGroup] = []
@@ -101,7 +110,7 @@ final class ASCManager {
     var buildPipelineMessage: String = ""
 
     // Screenshot track state per device type
-    var trackSlots: [String: [TrackSlot?]] = [:]      // keyed by ascDisplayType, 10-element arrays
+    var trackSlots: [String: [TrackSlot?]] = [:]      // keyed by locale + ascDisplayType, 10-element arrays
     var savedTrackState: [String: [TrackSlot?]] = [:] // snapshot after last load/save
     var localScreenshotAssets: [LocalScreenshotAsset] = []
     var isSyncing = false

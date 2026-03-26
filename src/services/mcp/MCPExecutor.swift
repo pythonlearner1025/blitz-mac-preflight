@@ -43,7 +43,9 @@ actor MCPExecutor {
         // Pre-navigate for ASC form tools so the user sees the target tab before approving.
         var previousNavigation: NavigationState?
         if name == "asc_fill_form" || name == "asc_open_submit_preview"
+            || name == "store_listing_switch_localization"
             || name == "asc_create_iap" || name == "asc_create_subscription" || name == "asc_set_app_price"
+            || name == "screenshots_switch_localization"
             || name == "screenshots_add_asset" || name == "screenshots_set_track" || name == "screenshots_save" {
             previousNavigation = await preNavigateASCTool(name: name, arguments: arguments)
         }
@@ -99,10 +101,14 @@ actor MCPExecutor {
                 targetTab = nil
             }
             targetAppSubTab = nil
+        } else if name == "store_listing_switch_localization" {
+            targetTab = .storeListing
+            targetAppSubTab = nil
         } else if name == "asc_open_submit_preview" {
             targetTab = .app
             targetAppSubTab = .overview
-        } else if name == "screenshots_add_asset"
+        } else if name == "screenshots_switch_localization"
+                    || name == "screenshots_add_asset"
                     || name == "screenshots_set_track" || name == "screenshots_save" {
             targetTab = .screenshots
             targetAppSubTab = nil
@@ -118,6 +124,27 @@ actor MCPExecutor {
         }
 
         if let targetTab {
+            if targetTab == .storeListing {
+                let storeListingLocale: String?
+                if name == "store_listing_switch_localization" {
+                    storeListingLocale = arguments["locale"] as? String
+                } else if name == "asc_fill_form", (arguments["tab"] as? String) == "storeListing" {
+                    storeListingLocale = arguments["locale"] as? String
+                } else {
+                    storeListingLocale = nil
+                }
+
+                if let storeListingLocale {
+                    let trimmedStoreListingLocale = storeListingLocale.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmedStoreListingLocale.isEmpty else {
+                        return previousNavigation
+                    }
+                    await MainActor.run {
+                        appState.ascManager.selectedStoreListingLocale = trimmedStoreListingLocale
+                    }
+                }
+            }
+
             await MainActor.run {
                 appState.activeTab = targetTab
                 if let targetAppSubTab {
@@ -256,6 +283,10 @@ actor MCPExecutor {
             return await executeASCSetCredentials(arguments)
         case "asc_fill_form":
             return try await executeASCFillForm(arguments)
+        case "store_listing_switch_localization":
+            return try await executeStoreListingSwitchLocalization(arguments)
+        case "screenshots_switch_localization":
+            return try await executeScreenshotsSwitchLocalization(arguments)
         case "screenshots_add_asset":
             return try await executeScreenshotsAddAsset(arguments)
         case "screenshots_set_track":
