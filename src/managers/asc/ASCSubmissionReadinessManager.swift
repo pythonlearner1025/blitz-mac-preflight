@@ -15,27 +15,14 @@ extension ASCManager {
     }
 
     var submissionReadiness: SubmissionReadiness {
-        let localization = localizations.first
-        let appInfoLocalization = appInfoLocalization
+        let localization = primaryVersionLocalization()
+        let appInfoLocalization = primaryAppInfoLocalization()
         let review = reviewDetail
         let demoRequired = review?.attributes.demoAccountRequired == true
         let version = appStoreVersions.first
         let readinessLocale = localization?.attributes.locale
-        let readinessScreenshotSets: [ASCScreenshotSet]
-        let readinessScreenshots: [String: [ASCScreenshot]]
-
-        if let readinessLocale,
-           let cachedSets = screenshotSetsByLocale[readinessLocale],
-           let cachedScreenshots = screenshotsByLocale[readinessLocale] {
-            readinessScreenshotSets = cachedSets
-            readinessScreenshots = cachedScreenshots
-        } else if readinessLocale == nil || activeScreenshotsLocale == readinessLocale {
-            readinessScreenshotSets = screenshotSets
-            readinessScreenshots = screenshots
-        } else {
-            readinessScreenshotSets = []
-            readinessScreenshots = [:]
-        }
+        let readinessScreenshotSets = readinessLocale.map(screenshotSetsForLocale) ?? []
+        let readinessScreenshots = readinessLocale.map(screenshotsForLocale) ?? [:]
 
         let macScreenshots = readinessScreenshotSets.first { $0.attributes.screenshotDisplayType == "APP_DESKTOP" }
         let isMacApp = macScreenshots != nil

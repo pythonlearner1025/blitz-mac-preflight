@@ -13,7 +13,7 @@ private enum ScreenshotDeviceType: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .iPhone: "iPhone 6.5\""
+        case .iPhone: "iPhone 6.7\""
         case .iPad: "iPad Pro 12.9\""
         case .mac: "Mac"
         }
@@ -70,7 +70,6 @@ struct ScreenshotsView: View {
     private var asc: ASCManager { appState.ascManager }
     private var platform: ProjectPlatform { appState.activeProject?.platform ?? .iOS }
 
-    @State private var selectedLocale: String = ""
     @State private var selectedDevice: ScreenshotDeviceType = .iPhone
     @State private var selectedAssetId: UUID?         // selected in asset library
     @State private var selectedTrackIndex: Int?       // selected in track
@@ -83,25 +82,31 @@ struct ScreenshotsView: View {
         ScreenshotDeviceType.types(for: platform)
     }
 
-    private var effectiveLocale: String {
-        if asc.localizations.contains(where: { $0.attributes.locale == selectedLocale }) {
-            return selectedLocale
-        }
+    private var currentLocale: String {
         if let selectedScreenshotsLocale = asc.selectedScreenshotsLocale,
            asc.localizations.contains(where: { $0.attributes.locale == selectedScreenshotsLocale }) {
             return selectedScreenshotsLocale
         }
-        return asc.activeScreenshotsLocale
-            ?? asc.localizations.first?.attributes.locale
-            ?? "en-US"
+        // fallback
+        return asc.localizations.first?.attributes.locale ?? "en-US"
+    }
+
+    private var selectedLocaleBinding: Binding<String> {
+        Binding(
+            get: { currentLocale },
+            set: { newValue in
+                asc.selectedScreenshotsLocale = newValue
+                Task { await loadSelectedLocaleData() }
+            }
+        )
     }
 
     private var currentTrack: [TrackSlot?] {
-        asc.trackSlotsForDisplayType(selectedDevice.ascDisplayType, locale: effectiveLocale)
+        asc.trackSlotsForDisplayType(selectedDevice.ascDisplayType, locale: currentLocale)
     }
 
     private var hasChanges: Bool {
-        asc.hasUnsavedChanges(displayType: selectedDevice.ascDisplayType, locale: effectiveLocale)
+        asc.hasUnsavedChanges(displayType: selectedDevice.ascDisplayType, locale: currentLocale)
     }
 
     private var filledSlotCount: Int {
@@ -121,7 +126,7 @@ struct ScreenshotsView: View {
                         Text("Screenshots")
                             .font(.title2.weight(.semibold))
                         if !asc.localizations.isEmpty {
-                            Picker("Locale", selection: $selectedLocale) {
+                            Picker("Locale", selection: selectedLocaleBinding) {
                                 ForEach(asc.localizations) { localization in
                                     Text(localization.attributes.locale).tag(localization.attributes.locale)
                                 }
@@ -154,29 +159,7 @@ struct ScreenshotsView: View {
         .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
             await loadData()
         }
-        .onChange(of: selectedLocale) { _, _ in
-            if asc.selectedScreenshotsLocale != selectedLocale {
-                asc.selectedScreenshotsLocale = selectedLocale
-            }
-            Task { await loadSelectedLocaleData() }
-        }
         .onChange(of: selectedDevice) { _, _ in loadTrackForDevice() }
-        .onChange(of: asc.localizations.count) { _, _ in
-            syncSelectedLocaleFromAvailable()
-        }
-        .onChange(of: asc.selectedScreenshotsLocale) { _, newValue in
-            guard let newValue else { return }
-            guard newValue != selectedLocale else { return }
-            guard asc.localizations.contains(where: { $0.attributes.locale == newValue }) else { return }
-            selectedLocale = newValue
-        }
-        .onChange(of: asc.screenshotDataRevision) { _, _ in
-            guard asc.lastScreenshotDataLocale == effectiveLocale else { return }
-            guard !asc.hasUnsavedChanges(displayType: selectedDevice.ascDisplayType, locale: effectiveLocale) else {
-                return
-            }
-            loadTrackForDevice(force: true)
-        }
         .alert("Import Error", isPresented: Binding(
             get: { importError != nil },
             set: { if !$0 { importError = nil } }
@@ -202,7 +185,7 @@ struct ScreenshotsView: View {
                                 Text(device.label)
                                     .font(.callout)
                                 Spacer()
-                                if asc.hasUnsavedChanges(displayType: device.ascDisplayType, locale: effectiveLocale) {
+                                if asc.hasUnsavedChanges(displayType: device.ascDisplayType, locale: currentLocale) {
                                     Circle()
                                         .fill(.orange)
                                         .frame(width: 6, height: 6)
@@ -451,7 +434,7 @@ struct ScreenshotsView: View {
 
     private func trackSlotView(index: Int) -> some View {
         let slot = currentTrack[index]
-        let saved = asc.savedTrackStateForDisplayType(selectedDevice.ascDisplayType, locale: effectiveLocale)[index]
+        let saved = asc.savedTrackStateForDisplayType(selectedDevice.ascDisplayType, locale: currentLocale)[index]
         let isSynced = slot?.id == saved?.id && slot != nil
         let hasError = slot?.ascScreenshot?.hasError == true
 
@@ -503,7 +486,7 @@ struct ScreenshotsView: View {
                             asc.removeFromTrack(
                                 displayType: selectedDevice.ascDisplayType,
                                 slotIndex: index,
-                                locale: effectiveLocale
+                                locale: currentLocale
                             )
                         }
                         if selectedTrackIndex == index { selectedTrackIndex = nil }
@@ -553,7 +536,7 @@ struct ScreenshotsView: View {
             .onDrop(of: [.text], delegate: TrackSlotDropDelegate(
                 targetIndex: index,
                 displayType: selectedDevice.ascDisplayType,
-                locale: effectiveLocale,
+                locale: currentLocale,
                 asc: asc,
                 localAssets: asc.localScreenshotAssets,
                 draggedAssetId: $draggedAssetId,
@@ -605,41 +588,21 @@ struct ScreenshotsView: View {
         }
 
         await asc.ensureTabData(.screenshots)
-        syncSelectedLocaleFromAvailable()
+        if asc.selectedScreenshotsLocale == nil {
+            asc.selectedScreenshotsLocale = asc.localizations.first?.attributes.locale
+        }
         await loadSelectedLocaleData()
     }
 
-    private func syncSelectedLocaleFromAvailable() {
-        let locales = Set(asc.localizations.map(\.attributes.locale))
-        guard let first = asc.localizations.first?.attributes.locale else {
-            selectedLocale = ""
-            if asc.selectedScreenshotsLocale != nil {
-                asc.selectedScreenshotsLocale = nil
-            }
-            return
-        }
-
-        let preferredLocale = asc.selectedScreenshotsLocale.flatMap { locales.contains($0) ? $0 : nil }
-            ?? (locales.contains(selectedLocale) ? selectedLocale : first)
-
-        if selectedLocale != preferredLocale {
-            selectedLocale = preferredLocale
-        }
-        if asc.selectedScreenshotsLocale != preferredLocale {
-            asc.selectedScreenshotsLocale = preferredLocale
-        }
-    }
-
     private func loadSelectedLocaleData(force: Bool = false) async {
-        syncSelectedLocaleFromAvailable()
-        guard !selectedLocale.isEmpty else { return }
-        await asc.loadScreenshots(locale: selectedLocale, force: force)
+        guard !currentLocale.isEmpty else { return }
+        await asc.loadScreenshots(locale: currentLocale, force: force)
         loadTrackForDevice(force: force)
     }
 
     private func loadTrackForDevice(force: Bool = false) {
         let displayType = selectedDevice.ascDisplayType
-        let locale = effectiveLocale
+        let locale = currentLocale
         if force || !asc.hasTrackState(displayType: displayType, locale: locale) {
             asc.loadTrackFromASC(displayType: displayType, locale: locale)
         }
@@ -760,7 +723,7 @@ struct ScreenshotsView: View {
     private func save() async {
         await asc.syncTrackToASC(
             displayType: selectedDevice.ascDisplayType,
-            locale: effectiveLocale
+            locale: currentLocale
         )
     }
 }

@@ -120,17 +120,29 @@ extension ASCManager {
         return loadedProjectId == projectId
     }
 
+    private struct OverviewPrimaryLocalization {
+        /// ASC localization record ID used in follow-up API calls like `fetchScreenshotSets(localizationId:)`.
+        let localizationId: String
+        /// Locale code used when storing overview data in Blitz's locale-keyed caches.
+        let locale: String
+
+        init?(_ localization: ASCVersionLocalization?) {
+            guard let localization else { return nil }
+            localizationId = localization.id
+            locale = localization.attributes.locale
+        }
+    }
+
     private func hydrateOverviewSecondaryData(
         projectId: String?,
         appId: String,
-        firstLocalizationId: String?,
-        firstLocalizationLocale: String?,
+        primaryLocalization: OverviewPrimaryLocalization?,
         appInfoId: String?,
         service: AppStoreConnectService
     ) async {
-        if let firstLocalizationId, let firstLocalizationLocale {
+        if let primaryLocalization {
             do {
-                let fetchedSets = try await service.fetchScreenshotSets(localizationId: firstLocalizationId)
+                let fetchedSets = try await service.fetchScreenshotSets(localizationId: primaryLocalization.localizationId)
                 let fetchedScreenshots = try await withThrowingTaskGroup(of: (String, [ASCScreenshot]).self) { group in
                     for set in fetchedSets {
                         group.addTask {
@@ -147,8 +159,8 @@ extension ASCManager {
                 }
 
                 guard !Task.isCancelled, isCurrentProject(projectId) else { return }
-                cacheScreenshots(
-                    locale: firstLocalizationLocale,
+                updateScreenshotCache(
+                    locale: primaryLocalization.locale,
                     sets: fetchedSets,
                     screenshots: Dictionary(uniqueKeysWithValues: fetchedScreenshots)
                 )
@@ -163,16 +175,22 @@ extension ASCManager {
 
         if let appInfoId {
             async let ageRatingTask: ASCAgeRatingDeclaration? = try? service.fetchAgeRating(appInfoId: appInfoId)
-            async let appInfoLocalizationTask: ASCAppInfoLocalization? = try? service.fetchAppInfoLocalization(appInfoId: appInfoId)
+            async let appInfoLocalizationsTask: [ASCAppInfoLocalization]? = try? service.fetchAppInfoLocalizations(appInfoId: appInfoId)
 
             let fetchedAgeRating = await ageRatingTask
-            let fetchedAppInfoLocalization = await appInfoLocalizationTask
+            let fetchedAppInfoLocalizations = await appInfoLocalizationsTask ?? []
 
             guard !Task.isCancelled, isCurrentProject(projectId) else { return }
             ageRatingDeclaration = fetchedAgeRating
-            appInfoLocalization = fetchedAppInfoLocalization
+            appInfoLocalizationsByLocale = Dictionary(uniqueKeysWithValues: fetchedAppInfoLocalizations.map {
+                ($0.attributes.locale, $0)
+            })
+            appInfoLocalization = primaryAppInfoLocalization(in: fetchedAppInfoLocalizations)
             finishOverviewReadinessLoading(Self.overviewMetadataFieldLabels)
         } else {
+            ageRatingDeclaration = nil
+            appInfoLocalizationsByLocale = [:]
+            appInfoLocalization = nil
             finishOverviewReadinessLoading(Self.overviewMetadataFieldLabels)
         }
 
@@ -191,29 +209,6 @@ extension ASCManager {
         guard !Task.isCancelled, isCurrentProject(projectId) else { return }
         await refreshSubmissionReadinessData()
         finishOverviewReadinessLoading(Self.overviewPricingFieldLabels)
-    }
-
-    private func hydrateScreenshotsSecondaryData(
-        projectId: String?,
-        locale: String,
-        localizationId: String,
-        service: AppStoreConnectService
-    ) async {
-        do {
-            let (fetchedSets, fetchedScreenshots) = try await fetchScreenshotData(
-                localizationId: localizationId,
-                service: service
-            )
-            guard !Task.isCancelled, isCurrentProject(projectId) else { return }
-            storeScreenshots(
-                locale: locale,
-                sets: fetchedSets,
-                screenshots: fetchedScreenshots,
-                makeActive: true
-            )
-        } catch {
-            print("Failed to hydrate screenshots: \(error)")
-        }
     }
 
     private func hydrateReviewSecondaryData(
@@ -322,16 +317,16 @@ extension ASCManager {
             builds = try await buildsTask
             finishOverviewReadinessLoading(Self.overviewBuildFieldLabels)
 
-            var firstLocalizationId: String?
-            var firstLocalizationLocale: String?
+            var primaryLocalization: OverviewPrimaryLocalization?
             if let latestId = versions.first?.id {
                 async let localizationsTask = service.fetchLocalizations(versionId: latestId)
                 async let reviewDetailTask: ASCReviewDetail? = try? service.fetchReviewDetail(versionId: latestId)
 
                 let fetchedLocalizations = try await localizationsTask
                 localizations = fetchedLocalizations
-                firstLocalizationId = fetchedLocalizations.first?.id
-                firstLocalizationLocale = fetchedLocalizations.first?.attributes.locale
+                primaryLocalization = OverviewPrimaryLocalization(
+                    primaryVersionLocalization(in: fetchedLocalizations)
+                )
                 finishOverviewReadinessLoading(Self.overviewLocalizationFieldLabels)
                 reviewDetail = await reviewDetailTask
                 finishOverviewReadinessLoading(Self.overviewReviewFieldLabels)
@@ -350,8 +345,7 @@ extension ASCManager {
                 await self.hydrateOverviewSecondaryData(
                     projectId: projectId,
                     appId: appId,
-                    firstLocalizationId: firstLocalizationId,
-                    firstLocalizationLocale: firstLocalizationLocale,
+                    primaryLocalization: primaryLocalization,
                     appInfoId: currentAppInfoId,
                     service: service
                 )
@@ -370,38 +364,22 @@ extension ASCManager {
             if let latestId = versions.first?.id {
                 let localizations = try await service.fetchLocalizations(versionId: latestId)
                 self.localizations = localizations
-                let preferredLocale = selectedScreenshotsLocale ?? activeScreenshotsLocale
+                let preferredLocale = selectedScreenshotsLocale
                 let targetLocalization = localizations.first(where: { $0.attributes.locale == preferredLocale })
                     ?? localizations.first
                 if let targetLocalization {
                     selectedScreenshotsLocale = targetLocalization.attributes.locale
-                    let projectId = loadedProjectId
-                    startBackgroundHydration(for: .screenshots) {
-                        await self.hydrateScreenshotsSecondaryData(
-                            projectId: projectId,
-                            locale: targetLocalization.attributes.locale,
-                            localizationId: targetLocalization.id,
-                            service: service
-                        )
-                    }
+                    await loadScreenshots(locale: targetLocalization.attributes.locale, force: true)
                 } else {
-                    screenshotSets = []
-                    screenshots = [:]
                     screenshotSetsByLocale = [:]
                     screenshotsByLocale = [:]
                     selectedScreenshotsLocale = nil
-                    activeScreenshotsLocale = nil
-                    lastScreenshotDataLocale = nil
                 }
             } else {
                 localizations = []
-                screenshotSets = []
-                screenshots = [:]
                 screenshotSetsByLocale = [:]
                 screenshotsByLocale = [:]
                 selectedScreenshotsLocale = nil
-                activeScreenshotsLocale = nil
-                lastScreenshotDataLocale = nil
             }
 
         case .appDetails:

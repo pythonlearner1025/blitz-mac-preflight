@@ -49,9 +49,7 @@ extension MCPExecutor {
         }
 
         return await MainActor.run {
-            appState.ascManager.selectedStoreListingLocale
-                ?? appState.ascManager.localizations.first?.attributes.locale
-                ?? "en-US"
+            appState.ascManager.activeStoreListingLocale() ?? "en-US"
         }
     }
 
@@ -101,36 +99,10 @@ extension MCPExecutor {
 
         let locale = await MainActor.run {
             appState.ascManager.selectedScreenshotsLocale
-                ?? appState.ascManager.activeScreenshotsLocale
                 ?? appState.ascManager.localizations.first?.attributes.locale
                 ?? "en-US"
         }
         return (locale, false)
-    }
-
-    private func validateScreenshotsLocaleSelection(
-        locale: String,
-        explicitlyRequested: Bool
-    ) async -> String? {
-        await MainActor.run {
-            guard explicitlyRequested else { return nil }
-            let selectedLocale = appState.ascManager.selectedScreenshotsLocale
-            guard selectedLocale == locale else {
-                return "Error: screenshots locale '\(locale)' is not selected in Blitz. "
-                    + "Call screenshots_switch_localization first."
-            }
-            return nil
-        }
-    }
-
-    private func prepareScreenshotsTrackIfNeeded(displayType: String, locale: String) async {
-        await MainActor.run {
-            let asc = appState.ascManager
-            if !asc.hasTrackState(displayType: displayType, locale: locale),
-               asc.selectedScreenshotsLocale == locale || asc.activeScreenshotsLocale == locale {
-                asc.loadTrackFromASC(displayType: displayType, locale: locale)
-            }
-        }
     }
 
     func executeASCSetCredentials(_ args: [String: Any]) async -> [String: Any] {
@@ -163,36 +135,12 @@ extension MCPExecutor {
             throw MCPServerService.MCPError.invalidToolArgs
         }
 
-        var fieldMap: [String: String] = [:]
-        if let fieldsArray = args["fields"] as? [[String: Any]] {
-            for item in fieldsArray {
-                if let field = item["field"] as? String, let value = item["value"] as? String {
-                    fieldMap[Self.fieldAliases[field] ?? field] = value
-                }
-            }
-        } else if let fieldsDict = args["fields"] as? [String: Any] {
-            for (key, value) in fieldsDict {
-                fieldMap[Self.fieldAliases[key] ?? key] = "\(value)"
-            }
-        } else if let fieldsString = args["fields"] as? String,
-                  let data = fieldsString.data(using: .utf8),
-                  let parsed = try? JSONSerialization.jsonObject(with: data) {
-            if let dict = parsed as? [String: Any] {
-                for (key, value) in dict {
-                    fieldMap[Self.fieldAliases[key] ?? key] = "\(value)"
-                }
-            } else if let array = parsed as? [[String: Any]] {
-                for item in array {
-                    if let field = item["field"] as? String, let value = item["value"] as? String {
-                        fieldMap[Self.fieldAliases[field] ?? field] = value
-                    }
-                }
-            }
-        }
-
+        let fieldMap = parseFieldMap(args["fields"], applyAliases: true)
         guard !fieldMap.isEmpty else {
             throw MCPServerService.MCPError.invalidToolArgs
         }
+
+        var resolvedStoreListingLocale: String?
 
         if let validFields = Self.validFieldsByTab[tab] {
             let invalid = fieldMap.keys.filter { !validFields.contains($0) }
@@ -219,6 +167,7 @@ extension MCPExecutor {
             var versionLocFields: [String: String] = [:]
             var infoLocFields: [String: String] = [:]
             let locale = await resolveStoreListingLocale(from: args)
+            resolvedStoreListingLocale = locale
 
             if let localeError = await prepareStoreListingLocale(locale) {
                 _ = await MainActor.run { appState.ascManager.pendingFormValues.removeValue(forKey: tab) }
@@ -316,8 +265,8 @@ extension MCPExecutor {
 
         _ = await MainActor.run { appState.ascManager.pendingFormValues.removeValue(forKey: tab) }
         var response: [String: Any] = ["success": true, "tab": tab, "fieldsUpdated": fieldMap.count]
-        if tab == "storeListing" {
-            response["locale"] = await resolveStoreListingLocale(from: args)
+        if let resolvedStoreListingLocale {
+            response["locale"] = resolvedStoreListingLocale
         }
         return mcpJSON(response)
     }
@@ -463,11 +412,14 @@ extension MCPExecutor {
         let displayType = args["displayType"] as? String ?? "APP_IPHONE_67"
         let (locale, explicitlyRequestedLocale) = await resolveScreenshotsLocale(from: args)
 
-        if let selectionError = await validateScreenshotsLocaleSelection(
-            locale: locale,
-            explicitlyRequested: explicitlyRequestedLocale
-        ) {
-            return mcpText(selectionError)
+        let selectedLocale = await MainActor.run {
+            appState.ascManager.selectedScreenshotsLocale ?? appState.ascManager.localizations.first?.attributes.locale
+        }
+        if explicitlyRequestedLocale, selectedLocale != locale {
+            return mcpText(
+                "Error: screenshots locale '\(locale)' is not selected in Blitz. "
+                    + "Call screenshots_switch_localization first."
+            )
         }
 
         guard let projectId = await MainActor.run(body: { appState.activeProjectId }) else {
@@ -481,7 +433,13 @@ extension MCPExecutor {
             return mcpText("Error: asset '\(assetFileName)' not found in local screenshots library")
         }
 
-        await prepareScreenshotsTrackIfNeeded(displayType: displayType, locale: locale)
+        await MainActor.run {
+            let asc = appState.ascManager
+            if !asc.hasTrackState(displayType: displayType, locale: locale),
+               selectedLocale == locale {
+                asc.loadTrackFromASC(displayType: displayType, locale: locale)
+            }
+        }
         let trackReady = await MainActor.run {
             appState.ascManager.hasTrackState(displayType: displayType, locale: locale)
         }
@@ -510,14 +468,23 @@ extension MCPExecutor {
         let displayType = args["displayType"] as? String ?? "APP_IPHONE_67"
         let (locale, explicitlyRequestedLocale) = await resolveScreenshotsLocale(from: args)
 
-        if let selectionError = await validateScreenshotsLocaleSelection(
-            locale: locale,
-            explicitlyRequested: explicitlyRequestedLocale
-        ) {
-            return mcpText(selectionError)
+        let selectedLocale = await MainActor.run {
+            appState.ascManager.selectedScreenshotsLocale ?? appState.ascManager.localizations.first?.attributes.locale
+        }
+        if explicitlyRequestedLocale, selectedLocale != locale {
+            return mcpText(
+                "Error: screenshots locale '\(locale)' is not selected in Blitz. "
+                    + "Call screenshots_switch_localization first."
+            )
         }
 
-        await prepareScreenshotsTrackIfNeeded(displayType: displayType, locale: locale)
+        await MainActor.run {
+            let asc = appState.ascManager
+            if !asc.hasTrackState(displayType: displayType, locale: locale),
+               selectedLocale == locale {
+                asc.loadTrackFromASC(displayType: displayType, locale: locale)
+            }
+        }
         let trackReady = await MainActor.run {
             appState.ascManager.hasTrackState(displayType: displayType, locale: locale)
         }

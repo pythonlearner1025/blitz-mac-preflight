@@ -50,11 +50,7 @@ extension ASCManager {
 
     /// Update a field on appInfoLocalizations (name, subtitle, privacyPolicyUrl)
     func updateAppInfoLocalizationField(_ field: String, value: String, locale: String? = nil) async {
-        let targetLocale = locale
-            ?? selectedStoreListingLocale
-            ?? appInfoLocalization?.attributes.locale
-            ?? localizations.first?.attributes.locale
-
+        let targetLocale = locale ?? activeStoreListingLocale()
         guard let targetLocale else {
             writeError = "No app info localization selected."
             return

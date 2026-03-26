@@ -30,18 +30,14 @@ extension ASCManager {
         guard let service else { return }
 
         if !force,
-           let cachedSets = screenshotSetsByLocale[locale],
-           let cachedScreenshots = screenshotsByLocale[locale] {
-            setActiveScreenshots(locale: locale, sets: cachedSets, screenshots: cachedScreenshots)
+           screenshotSetsByLocale[locale] != nil,
+           screenshotsByLocale[locale] != nil {
             return
         }
 
         await ensureScreenshotLocalizationsLoaded(service: service)
         guard let loc = localizations.first(where: { $0.attributes.locale == locale })
                 ?? localizations.first else {
-            activeScreenshotsLocale = nil
-            screenshotSets = []
-            screenshots = [:]
             return
         }
 
@@ -50,39 +46,46 @@ extension ASCManager {
                 localizationId: loc.id,
                 service: service
             )
-            storeScreenshots(
-                locale: loc.attributes.locale,
-                sets: fetchedSets,
-                screenshots: fetchedScreenshots,
-                makeActive: true
-            )
+            updateScreenshotCache(locale: loc.attributes.locale, sets: fetchedSets, screenshots: fetchedScreenshots)
         } catch {
             print("Failed to load screenshots for locale \(loc.attributes.locale): \(error)")
         }
     }
 
-    func storeScreenshots(
-        locale: String,
-        sets: [ASCScreenshotSet],
-        screenshots: [String: [ASCScreenshot]],
-        makeActive: Bool
-    ) {
-        screenshotSetsByLocale[locale] = sets
-        screenshotsByLocale[locale] = screenshots
-        if makeActive {
-            setActiveScreenshots(locale: locale, sets: sets, screenshots: screenshots)
-        }
-        lastScreenshotDataLocale = locale
-        screenshotDataRevision += 1
+    func screenshotSetsForLocale(_ locale: String) -> [ASCScreenshotSet] {
+        screenshotSetsByLocale[locale] ?? []
     }
 
-    func cacheScreenshots(
+    func screenshotsForLocale(_ locale: String) -> [String: [ASCScreenshot]] {
+        screenshotsByLocale[locale] ?? [:]
+    }
+
+    func updateScreenshotCache(
         locale: String,
         sets: [ASCScreenshotSet],
         screenshots: [String: [ASCScreenshot]]
     ) {
         screenshotSetsByLocale[locale] = sets
         screenshotsByLocale[locale] = screenshots
+        for displayType in trackDisplayTypes(for: locale) {
+            loadTrackFromASC(displayType: displayType, locale: locale)
+        }
+    }
+
+    private func trackDisplayTypes(for locale: String) -> Set<String> {
+        var displayTypes = Set(screenshotSetsForLocale(locale).map(\.attributes.screenshotDisplayType))
+        for key in Set(trackSlots.keys).union(savedTrackState.keys) {
+            if let displayType = displayType(fromTrackKey: key, locale: locale) {
+                displayTypes.insert(displayType)
+            }
+        }
+        return displayTypes
+    }
+
+    private func displayType(fromTrackKey key: String, locale: String) -> String? {
+        let prefix = "\(locale)::"
+        guard key.hasPrefix(prefix) else { return nil }
+        return String(key.dropFirst(prefix.count))
     }
 
     func fetchScreenshotData(
@@ -113,14 +116,9 @@ extension ASCManager {
         locale: String,
         previousSlots: [TrackSlot?] = []
     ) -> [TrackSlot?] {
-        let localeSets = screenshotSetsByLocale[locale]
-            ?? ((activeScreenshotsLocale == nil || activeScreenshotsLocale == locale) ? screenshotSets : [])
-        let localeScreenshots = screenshotsByLocale[locale]
-            ?? ((activeScreenshotsLocale == nil || activeScreenshotsLocale == locale) ? screenshots : [:])
-
-        let set = localeSets.first { $0.attributes.screenshotDisplayType == displayType }
+        let set = screenshotSetsForLocale(locale).first { $0.attributes.screenshotDisplayType == displayType }
         var slots: [TrackSlot?] = Array(repeating: nil, count: 10)
-        if let set, let shots = localeScreenshots[set.id] {
+        if let set, let shots = screenshotsForLocale(locale)[set.id] {
             for (i, shot) in shots.prefix(10).enumerated() {
                 var localImage: NSImage? = nil
                 if shot.imageURL == nil, i < previousSlots.count, let prev = previousSlots[i] {
@@ -177,16 +175,6 @@ extension ASCManager {
             padded.append(nil)
         }
         return padded
-    }
-
-    private func setActiveScreenshots(
-        locale: String,
-        sets: [ASCScreenshotSet],
-        screenshots: [String: [ASCScreenshot]]
-    ) {
-        activeScreenshotsLocale = locale
-        screenshotSets = sets
-        self.screenshots = screenshots
     }
 
     private func ensureScreenshotLocalizationsLoaded(service: AppStoreConnectService) async {

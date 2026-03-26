@@ -36,6 +36,31 @@ actor MCPExecutor {
         self.appState = appState
     }
 
+    func parseFieldMap(_ rawFields: Any?, applyAliases: Bool) -> [String: String] {
+        var fieldMap: [String: String] = [:]
+        let mapField: (String) -> String = { field in
+            applyAliases ? (Self.fieldAliases[field] ?? field) : field
+        }
+
+        if let fieldsArray = rawFields as? [[String: Any]] {
+            for item in fieldsArray {
+                if let field = item["field"] as? String, let value = item["value"] as? String {
+                    fieldMap[mapField(field)] = value
+                }
+            }
+        } else if let fieldsDict = rawFields as? [String: Any] {
+            for (key, value) in fieldsDict {
+                fieldMap[mapField(key)] = "\(value)"
+            }
+        } else if let fieldsString = rawFields as? String,
+                  let data = fieldsString.data(using: .utf8),
+                  let parsed = try? JSONSerialization.jsonObject(with: data) {
+            fieldMap = parseFieldMap(parsed, applyAliases: applyAliases)
+        }
+
+        return fieldMap
+    }
+
     /// Execute a tool call, requesting approval if needed.
     func execute(name: String, arguments: [String: Any]) async throws -> [String: Any] {
         let category = MCPRegistry.category(for: name)
@@ -124,27 +149,6 @@ actor MCPExecutor {
         }
 
         if let targetTab {
-            if targetTab == .storeListing {
-                let storeListingLocale: String?
-                if name == "store_listing_switch_localization" {
-                    storeListingLocale = arguments["locale"] as? String
-                } else if name == "asc_fill_form", (arguments["tab"] as? String) == "storeListing" {
-                    storeListingLocale = arguments["locale"] as? String
-                } else {
-                    storeListingLocale = nil
-                }
-
-                if let storeListingLocale {
-                    let trimmedStoreListingLocale = storeListingLocale.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !trimmedStoreListingLocale.isEmpty else {
-                        return previousNavigation
-                    }
-                    await MainActor.run {
-                        appState.ascManager.selectedStoreListingLocale = trimmedStoreListingLocale
-                    }
-                }
-            }
-
             await MainActor.run {
                 appState.activeTab = targetTab
                 if let targetAppSubTab {
@@ -160,32 +164,7 @@ actor MCPExecutor {
 
         if name == "asc_fill_form",
            let tab = arguments["tab"] as? String {
-            var fieldMap: [String: String] = [:]
-            if let fieldsArray = arguments["fields"] as? [[String: Any]] {
-                for item in fieldsArray {
-                    if let field = item["field"] as? String, let value = item["value"] as? String {
-                        fieldMap[field] = value
-                    }
-                }
-            } else if let fieldsDict = arguments["fields"] as? [String: Any] {
-                for (key, value) in fieldsDict {
-                    fieldMap[key] = "\(value)"
-                }
-            } else if let fieldsString = arguments["fields"] as? String,
-                      let data = fieldsString.data(using: .utf8),
-                      let parsed = try? JSONSerialization.jsonObject(with: data) {
-                if let dict = parsed as? [String: Any] {
-                    for (key, value) in dict {
-                        fieldMap[key] = "\(value)"
-                    }
-                } else if let array = parsed as? [[String: Any]] {
-                    for item in array {
-                        if let field = item["field"] as? String, let value = item["value"] as? String {
-                            fieldMap[field] = value
-                        }
-                    }
-                }
-            }
+            let fieldMap = parseFieldMap(arguments["fields"], applyAliases: false)
 
             if !fieldMap.isEmpty {
                 let fieldMapCopy = fieldMap

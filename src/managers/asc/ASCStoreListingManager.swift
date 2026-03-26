@@ -6,60 +6,53 @@ import Foundation
 extension ASCManager {
     // MARK: - Locale Selection
 
-    func effectiveStoreListingLocale() -> String? {
-        if let selectedStoreListingLocale,
-           localizations.contains(where: { $0.attributes.locale == selectedStoreListingLocale }) {
-            return selectedStoreListingLocale
+    /// Primary store-listing locale from ASC app settings, falling back to the first loaded localization.
+    func primaryLocalizationLocale() -> String? {
+        if let primaryLocale = app?.primaryLocale,
+           localizations.contains(where: { $0.attributes.locale == primaryLocale }) {
+            return primaryLocale
         }
         return localizations.first?.attributes.locale
     }
 
+    /// Primary version-localization record used for overview/readiness, independent of the active editor locale.
+    func primaryVersionLocalization(in candidates: [ASCVersionLocalization]? = nil) -> ASCVersionLocalization? {
+        let candidates = candidates ?? localizations
+        guard let primaryLocale = app?.primaryLocale else { return candidates.first }
+        return candidates.first(where: { $0.attributes.locale == primaryLocale }) ?? candidates.first
+    }
+
+    /// Primary app-info-localization record used for overview/readiness, independent of the active editor locale.
+    func primaryAppInfoLocalization(in candidates: [ASCAppInfoLocalization]? = nil) -> ASCAppInfoLocalization? {
+        let primaryLocale = app?.primaryLocale
+
+        if let primaryLocale,
+           let match = candidates?.first(where: { $0.attributes.locale == primaryLocale }) ?? appInfoLocalizationsByLocale[primaryLocale] {
+            return match
+        }
+
+        return candidates?.first ?? appInfoLocalization
+    }
+
+    /// Active store-listing locale for the UI/editor, preferring the user's selected locale when it is still valid.
+    func activeStoreListingLocale() -> String? {
+        selectedStoreListingLocale.flatMap { locale in
+            localizations.contains(where: { $0.attributes.locale == locale }) ? locale : nil
+        } ?? primaryLocalizationLocale()
+    }
+
     func storeListingLocalization(locale: String? = nil) -> ASCVersionLocalization? {
-        if let locale,
-           let localization = localizations.first(where: { $0.attributes.locale == locale }) {
-            return localization
+        if let locale {
+            return localizations.first(where: { $0.attributes.locale == locale })
         }
-        if let effectiveLocale = effectiveStoreListingLocale() {
-            return localizations.first(where: { $0.attributes.locale == effectiveLocale }) ?? localizations.first
-        }
-        return localizations.first
+        return primaryVersionLocalization()
     }
 
     func appInfoLocalizationForLocale(_ locale: String? = nil) -> ASCAppInfoLocalization? {
-        if let locale {
-            return appInfoLocalizationsByLocale[locale]
+        if let resolvedLocale = locale ?? activeStoreListingLocale() {
+            return appInfoLocalizationsByLocale[resolvedLocale]
         }
-        if let effectiveLocale = effectiveStoreListingLocale() {
-            return appInfoLocalizationsByLocale[effectiveLocale]
-        }
-        return appInfoLocalization
-    }
-
-    func setSelectedStoreListingLocale(_ locale: String?) {
-        let locales = Set(localizations.map(\.attributes.locale))
-        if let locale, locales.contains(locale) {
-            selectedStoreListingLocale = locale
-        } else {
-            selectedStoreListingLocale = localizations.first?.attributes.locale
-        }
-    }
-
-    // MARK: - Data Hydration
-
-    func applyStoreListingMetadata(
-        versionLocalizations: [ASCVersionLocalization],
-        appInfoLocalizations: [ASCAppInfoLocalization]
-    ) {
-        localizations = versionLocalizations
-        appInfoLocalizationsByLocale = Dictionary(uniqueKeysWithValues: appInfoLocalizations.map {
-            ($0.attributes.locale, $0)
-        })
-
-        let primaryLocale = versionLocalizations.first?.attributes.locale
-        appInfoLocalization = primaryLocale.flatMap { appInfoLocalizationsByLocale[$0] } ?? appInfoLocalizations.first
-
-        setSelectedStoreListingLocale(selectedStoreListingLocale)
-        storeListingDataRevision += 1
+        return primaryAppInfoLocalization()
     }
 
     func refreshStoreListingMetadata(
@@ -94,10 +87,13 @@ extension ASCManager {
             selectedStoreListingLocale = preferredLocale
         }
 
-        applyStoreListingMetadata(
-            versionLocalizations: versionLocalizations,
-            appInfoLocalizations: fetchedAppInfoLocalizations
-        )
+        localizations = versionLocalizations
+        appInfoLocalizationsByLocale = Dictionary(uniqueKeysWithValues: fetchedAppInfoLocalizations.map {
+            ($0.attributes.locale, $0)
+        })
+
+        appInfoLocalization = primaryAppInfoLocalization(in: fetchedAppInfoLocalizations)
+        selectedStoreListingLocale = activeStoreListingLocale()
     }
 
     // MARK: - Localization Updates

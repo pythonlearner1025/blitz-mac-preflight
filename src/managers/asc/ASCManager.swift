@@ -25,15 +25,9 @@ final class ASCManager {
     var localizations: [ASCVersionLocalization] = []
     var selectedStoreListingLocale: String?
     var appInfoLocalizationsByLocale: [String: ASCAppInfoLocalization] = [:]
-    var storeListingDataRevision: Int = 0
-    var screenshotSets: [ASCScreenshotSet] = []
-    var screenshots: [String: [ASCScreenshot]] = [:]  // keyed by screenshotSet.id
     var screenshotSetsByLocale: [String: [ASCScreenshotSet]] = [:]
     var screenshotsByLocale: [String: [String: [ASCScreenshot]]] = [:]
     var selectedScreenshotsLocale: String?
-    var activeScreenshotsLocale: String?
-    var lastScreenshotDataLocale: String?
-    var screenshotDataRevision: Int = 0
     var customerReviews: [ASCCustomerReview] = []
     var builds: [ASCBuild] = []
     var betaGroups: [ASCBetaGroup] = []

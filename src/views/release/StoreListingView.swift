@@ -4,7 +4,6 @@ struct StoreListingView: View {
     var appState: AppState
 
     private var asc: ASCManager { appState.ascManager }
-    @State private var selectedLocale: String = ""
     @FocusState private var focusedField: String?
 
     // Editable field values
@@ -19,17 +18,19 @@ struct StoreListingView: View {
     @State private var privacyPolicyUrl: String = ""
 
     @State private var isSaving = false
-    @State private var lastSavedField: String?
 
-    private var effectiveLocale: String {
-        if asc.localizations.contains(where: { $0.attributes.locale == selectedLocale }) {
-            return selectedLocale
-        }
-        if let selectedStoreListingLocale = asc.selectedStoreListingLocale,
-           asc.localizations.contains(where: { $0.attributes.locale == selectedStoreListingLocale }) {
-            return selectedStoreListingLocale
-        }
-        return asc.localizations.first?.attributes.locale ?? ""
+    private var currentLocale: String {
+        asc.activeStoreListingLocale() ?? ""
+    }
+
+    private var selectedLocaleBinding: Binding<String> {
+        Binding(
+            get: { currentLocale },
+            set: { newValue in
+                asc.selectedStoreListingLocale = newValue
+                populateCurrentFields()
+            }
+        )
     }
 
     var body: some View {
@@ -45,36 +46,17 @@ struct StoreListingView: View {
         }
         .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
             await asc.ensureTabData(.storeListing)
-            syncSelectedLocaleFromAvailable()
-            populateFields(
-                from: asc.storeListingLocalization(locale: effectiveLocale),
-                infoLocalization: asc.appInfoLocalizationForLocale(effectiveLocale)
-            )
+            populateCurrentFields()
             applyPendingValues()
         }
-        .onChange(of: selectedLocale) { _, _ in
-            asc.setSelectedStoreListingLocale(selectedLocale)
-            populateFields(
-                from: asc.storeListingLocalization(locale: effectiveLocale),
-                infoLocalization: asc.appInfoLocalizationForLocale(effectiveLocale)
-            )
-        }
-        .onChange(of: asc.selectedStoreListingLocale) { _, newValue in
-            guard let newValue else { return }
-            guard asc.localizations.contains(where: { $0.attributes.locale == newValue }) else { return }
-            guard newValue != selectedLocale else { return }
-            selectedLocale = newValue
-        }
-        .onChange(of: asc.localizations.count) { _, _ in
-            syncSelectedLocaleFromAvailable()
-        }
-        .onChange(of: asc.storeListingDataRevision) { _, _ in
-            syncSelectedLocaleFromAvailable()
+        .onChange(of: asc.selectedStoreListingLocale) { _, _ in
             guard focusedField == nil else { return }
-            populateFields(
-                from: asc.storeListingLocalization(locale: effectiveLocale),
-                infoLocalization: asc.appInfoLocalizationForLocale(effectiveLocale)
-            )
+            populateCurrentFields()
+        }
+        .onChange(of: asc.isTabLoading(.storeListing)) { wasLoading, isLoading in
+            guard wasLoading, !isLoading else { return }
+            guard focusedField == nil else { return }
+            populateCurrentFields()
         }
         .onDisappear {
             Task { await flushChanges() }
@@ -84,24 +66,20 @@ struct StoreListingView: View {
     @ViewBuilder
     private var listingContent: some View {
         let locales = asc.localizations
-        let current = asc.storeListingLocalization(locale: effectiveLocale)
-        let currentAppInfoLocalization = asc.appInfoLocalizationForLocale(effectiveLocale)
+        let current = asc.storeListingLocalization(locale: currentLocale)
         let isLoading = asc.isTabLoading(.storeListing)
 
         VStack(spacing: 0) {
             // Toolbar
             HStack {
                 if !locales.isEmpty {
-                    Picker("Locale", selection: $selectedLocale) {
+                    Picker("Locale", selection: selectedLocaleBinding) {
                         ForEach(locales) { loc in
                             Text(loc.attributes.locale).tag(loc.attributes.locale)
                         }
                     }
                     .pickerStyle(.menu)
                     .frame(width: 160)
-                    .onAppear {
-                        syncSelectedLocaleFromAvailable()
-                    }
                 }
                 Spacer()
                 if isSaving {
@@ -156,10 +134,6 @@ struct StoreListingView: View {
                 }
             }
         }
-        .onAppear {
-            populateFields(from: current, infoLocalization: currentAppInfoLocalization)
-            applyPendingValues()
-        }
         .onChange(of: asc.pendingFormVersion) { _, _ in
             applyPendingValues()
         }
@@ -170,25 +144,11 @@ struct StoreListingView: View {
         }
     }
 
-    private func syncSelectedLocaleFromAvailable() {
-        let locales = Set(asc.localizations.map(\.attributes.locale))
-        guard let first = asc.localizations.first?.attributes.locale else {
-            selectedLocale = ""
-            if asc.selectedStoreListingLocale != nil {
-                asc.selectedStoreListingLocale = nil
-            }
-            return
-        }
-
-        let preferredLocale = asc.selectedStoreListingLocale.flatMap { locales.contains($0) ? $0 : nil }
-            ?? (locales.contains(selectedLocale) ? selectedLocale : first)
-
-        if selectedLocale != preferredLocale {
-            selectedLocale = preferredLocale
-        }
-        if asc.selectedStoreListingLocale != preferredLocale {
-            asc.selectedStoreListingLocale = preferredLocale
-        }
+    private func populateCurrentFields() {
+        populateFields(
+            from: asc.storeListingLocalization(locale: currentLocale),
+            infoLocalization: asc.appInfoLocalizationForLocale(currentLocale)
+        )
     }
 
     private func populateFields(from loc: ASCVersionLocalization?, infoLocalization: ASCAppInfoLocalization?) {
@@ -245,9 +205,9 @@ struct StoreListingView: View {
         isSaving = true
         if Self.appInfoLocFields.contains(field) {
             // These fields live on appInfoLocalizations, not version localizations
-            await asc.updateAppInfoLocalizationField(field, value: value, locale: effectiveLocale)
+            await asc.updateAppInfoLocalizationField(field, value: value, locale: currentLocale)
         } else {
-            await asc.updateLocalizationField(field, value: value, locale: effectiveLocale)
+            await asc.updateLocalizationField(field, value: value, locale: currentLocale)
         }
         isSaving = false
     }

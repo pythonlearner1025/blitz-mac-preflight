@@ -48,7 +48,7 @@ extension ASCManager {
         let appInfoLocFieldNames: Set<String> = ["name", "title", "subtitle", "privacyPolicyUrl"]
         for (tab, fields) in pendingFormValues {
             if tab == "storeListing" {
-                let locale = effectiveStoreListingLocale()
+                let locale = activeStoreListingLocale()
                 var versionLocFields: [String: String] = [:]
                 var infoLocFields: [String: String] = [:]
                 for (field, value) in fields {
