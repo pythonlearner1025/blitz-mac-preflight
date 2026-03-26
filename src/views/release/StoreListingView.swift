@@ -23,15 +23,18 @@ struct StoreListingView: View {
 
     var body: some View {
         ASCCredentialGate(
+            appState: appState,
             ascManager: asc,
             projectId: appState.activeProjectId ?? "",
             bundleId: appState.activeProject?.metadata.bundleIdentifier
         ) {
-            ASCTabContent(asc: asc, tab: .storeListing, platform: appState.activeProject?.platform ?? .iOS) {
+            ASCTabContent(appState: appState, asc: asc, tab: .storeListing, platform: appState.activeProject?.platform ?? .iOS) {
                 listingContent
             }
         }
-        .task { await asc.fetchTabData(.storeListing) }
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
+            await asc.ensureTabData(.storeListing)
+        }
         .onDisappear {
             Task { await flushChanges() }
         }
@@ -42,6 +45,7 @@ struct StoreListingView: View {
         let locales = asc.localizations
         let current = locales.first { $0.attributes.locale == selectedLocale }
             ?? locales.first
+        let isLoading = asc.isTabLoading(.storeListing)
 
         VStack(spacing: 0) {
             // Toolbar
@@ -79,6 +83,7 @@ struct StoreListingView: View {
                     }
                     .help("Open in App Store Connect")
                 }
+                ASCTabRefreshButton(asc: asc, tab: .storeListing, helpText: "Refresh store listing data")
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 10)
@@ -101,12 +106,19 @@ struct StoreListingView: View {
                     }
                     .padding(24)
                 } else if asc.localizations.isEmpty {
-                    ContentUnavailableView(
-                        "No Localizations",
-                        systemImage: "text.page",
-                        description: Text("No localizations found for the latest version.")
-                    )
-                    .padding(.top, 60)
+                    if isLoading {
+                        ASCTabLoadingPlaceholder(
+                            title: "Loading Store Listing",
+                            message: "Fetching localizations and editable metadata."
+                        )
+                    } else {
+                        ContentUnavailableView(
+                            "No Localizations",
+                            systemImage: "text.page",
+                            description: Text("No localizations found for the latest version.")
+                        )
+                        .padding(.top, 60)
+                    }
                 }
             }
         }

@@ -15,15 +15,18 @@ struct AnalyticsView: View {
 
     var body: some View {
         ASCCredentialGate(
+            appState: appState,
             ascManager: asc,
             projectId: appState.activeProjectId ?? "",
             bundleId: appState.activeProject?.metadata.bundleIdentifier
         ) {
-            ASCTabContent(asc: asc, tab: .analytics, platform: appState.activeProject?.platform ?? .iOS) {
+            ASCTabContent(appState: appState, asc: asc, tab: .analytics, platform: appState.activeProject?.platform ?? .iOS) {
                 analyticsContent
             }
         }
-        .task { await asc.fetchTabData(.analytics) }
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
+            await asc.ensureTabData(.analytics)
+        }
     }
 
     @ViewBuilder
@@ -43,6 +46,7 @@ struct AnalyticsView: View {
                     }
                     .pickerStyle(.segmented)
                     .frame(width: 240)
+                    ASCTabRefreshButton(asc: asc, tab: .analytics, helpText: "Refresh analytics tab")
                 }
 
                 if !hasVendor {

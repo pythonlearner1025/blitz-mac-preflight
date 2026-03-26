@@ -14,9 +14,79 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
 ENTITLEMENTS="$ROOT_DIR/scripts/Entitlements.plist"
 TIMESTAMP_MODE="${CODESIGN_TIMESTAMP:-auto}"
+REQUIRE_SIGNED_RELEASE="${BLITZ_REQUIRE_SIGNED_RELEASE:-0}"
+
+resolve_ascd_path() {
+    local candidate="${BLITZ_ASCD_PATH:-}"
+    [ -n "$candidate" ] || return 1
+    [ -x "$candidate" ] || return 1
+    printf '%s\n' "$candidate"
+}
+
+resolve_ascd_source_dir() {
+    local candidates=()
+
+    if [ -n "${BLITZ_ASCD_SOURCE_DIR:-}" ]; then
+        candidates+=("$BLITZ_ASCD_SOURCE_DIR")
+    fi
+
+    candidates+=(
+        "$ROOT_DIR/deps/App-Store-Connect-CLI-helper"
+    )
+
+    local candidate
+    for candidate in "${candidates[@]}"; do
+        [ -n "$candidate" ] || continue
+        if [ -f "$candidate/cmd/ascd/main.go" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+build_ascd_helper() {
+    local source_dir="$1"
+    local output_dir="$ROOT_DIR/.build/ascd-helper"
+    local output_path="$output_dir/ascd"
+
+    if ! command -v go >/dev/null 2>&1; then
+        echo "ERROR: Go is required to build the bundled ascd helper." >&2
+        echo "       Install Go, or set BLITZ_ASCD_PATH to a prebuilt compatible helper binary." >&2
+        return 1
+    fi
+
+    mkdir -p "$output_dir"
+    echo "Building ascd helper from $source_dir" >&2
+    (
+        cd "$source_dir"
+        go build -o "$output_path" ./cmd/ascd
+    )
+    printf '%s\n' "$output_path"
+}
+
+verify_ascd_helper() {
+    local helper_path="$1"
+    local response
+
+    response="$(printf '{"id":"bundle-check","method":"ping"}\n' | "$helper_path" 2>/dev/null | head -1 || true)"
+    case "$response" in
+        *'"id":"bundle-check"'*'"result"'*)
+            return 0
+            ;;
+    esac
+
+    return 1
+}
 
 if [ "$CONFIG" = "debug" ] && [ "$TIMESTAMP_MODE" = "auto" ]; then
     TIMESTAMP_MODE="none"
+fi
+
+if [ -z "$SIGNING_IDENTITY" ] && [ "$REQUIRE_SIGNED_RELEASE" = "1" ]; then
+    echo "ERROR: APPLE_SIGNING_IDENTITY is required for production release builds." >&2
+    exit 1
 fi
 
 if [ -z "$SIGNING_IDENTITY" ]; then
@@ -31,14 +101,56 @@ VERSION=$(node -e "const p=JSON.parse(require('fs').readFileSync('$ROOT_DIR/pack
 echo "Building $APP_NAME.app v$VERSION ($CONFIG)..."
 
 # Build
-swift build -c "$CONFIG"
+swift build -c "$CONFIG" --product Blitz
+swift build -c "$CONFIG" --product blitz-macos-mcp
 
 # Create .app structure
+rm -rf "$BUNDLE_DIR"
 mkdir -p "$BUNDLE_DIR/Contents/MacOS"
 mkdir -p "$BUNDLE_DIR/Contents/Resources"
+mkdir -p "$BUNDLE_DIR/Contents/Helpers"
 
 # Copy binary
 cp ".build/${CONFIG}/${APP_NAME}" "$BUNDLE_DIR/Contents/MacOS/${APP_NAME}"
+
+# Copy the standalone MCP helper that Codex launches directly over stdio.
+HELPER_BINARY=".build/${CONFIG}/blitz-macos-mcp"
+if [ -f "$HELPER_BINARY" ]; then
+    cp "$HELPER_BINARY" "$BUNDLE_DIR/Contents/Helpers/blitz-macos-mcp"
+    chmod 755 "$BUNDLE_DIR/Contents/Helpers/blitz-macos-mcp"
+    echo "Copied blitz-macos-mcp helper into app bundle"
+else
+    echo "WARNING: blitz-macos-mcp helper was not built; MCP integration will be unavailable."
+fi
+
+ASC_HELPER_BINARY="$(resolve_ascd_path || true)"
+if [ -z "$ASC_HELPER_BINARY" ]; then
+    ASC_HELPER_SOURCE_DIR="$(resolve_ascd_source_dir || true)"
+    if [ -n "$ASC_HELPER_SOURCE_DIR" ]; then
+        ASC_HELPER_BINARY="$(build_ascd_helper "$ASC_HELPER_SOURCE_DIR")"
+    fi
+fi
+
+if [ -n "$ASC_HELPER_BINARY" ]; then
+    if ! verify_ascd_helper "$ASC_HELPER_BINARY"; then
+        echo "ERROR: ascd helper is not compatible with Blitz:"
+        echo "       $ASC_HELPER_BINARY"
+        echo "       Expected the forked helper binary with the JSON-line long-lived protocol."
+        exit 1
+    fi
+    cp "$ASC_HELPER_BINARY" "$BUNDLE_DIR/Contents/Helpers/ascd"
+    chmod 755 "$BUNDLE_DIR/Contents/Helpers/ascd"
+    echo "Copied ascd helper into app bundle from $ASC_HELPER_BINARY"
+else
+    echo "ERROR: ascd helper not found."
+    echo "       Set BLITZ_ASCD_PATH to a built forked helper binary, or"
+    echo "       set BLITZ_ASCD_SOURCE_DIR to the App-Store-Connect-CLI-helper fork checkout."
+    echo "       Source builds can also place the fork at:"
+    echo "       $ROOT_DIR/deps/App-Store-Connect-CLI-helper"
+    echo "       If you cloned Blitz from git, run:"
+    echo "       git submodule update --init --recursive"
+    exit 1
+fi
 
 # Generate app icon (.icns) from PNG
 ICON_PNG="$ROOT_DIR/src/resources/blitz-icon.png"
@@ -68,8 +180,8 @@ for bundle_dir in .build/${CONFIG}/*.bundle; do
     fi
 done
 
-# Embed Claude skills in .app bundle (installed to ~/.claude/skills/ at app startup)
-SKILLS_SRC="$ROOT_DIR/.claude/skills"
+# Embed Claude skills in .app bundle
+SKILLS_SRC="$ROOT_DIR/src/resources/skills"
 SKILLS_DST="$BUNDLE_DIR/Contents/Resources/claude-skills"
 if [ -d "$SKILLS_SRC" ]; then
     rm -rf "$SKILLS_DST"
@@ -160,13 +272,19 @@ codesign_bundle_path() {
     fi
 }
 
-# Sign nested native binaries first (inside-out — required for notarization)
-if [ "$SIGNING_IDENTITY" != "-" ]; then
-    echo "Signing native dependencies..."
-    find "$BUNDLE_DIR/Contents/Resources" -type f \( -name "*.node" -o -name "*.dylib" \) 2>/dev/null | while read -r f; do
-        codesign_bundle_path "$f" 2>/dev/null || true
-        echo "  Signed: $f"
-    done
+# Sign nested native binaries first (inside-out — also required for ad-hoc CI bundle verification)
+echo "Signing native dependencies..."
+find "$BUNDLE_DIR/Contents/Resources" -type f \( -name "*.node" -o -name "*.dylib" \) 2>/dev/null | while read -r f; do
+    codesign_bundle_path "$f" 2>/dev/null || true
+    echo "  Signed: $f"
+done
+if [ -f "$BUNDLE_DIR/Contents/Helpers/blitz-macos-mcp" ]; then
+    codesign_bundle_path "$BUNDLE_DIR/Contents/Helpers/blitz-macos-mcp"
+    echo "  Signed: $BUNDLE_DIR/Contents/Helpers/blitz-macos-mcp"
+fi
+if [ -f "$BUNDLE_DIR/Contents/Helpers/ascd" ]; then
+    codesign_bundle_path "$BUNDLE_DIR/Contents/Helpers/ascd"
+    echo "  Signed: $BUNDLE_DIR/Contents/Helpers/ascd"
 fi
 
 # Sign the .app bundle (must be after nested signing)

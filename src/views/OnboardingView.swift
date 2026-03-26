@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 
 /// Terminal app options for onboarding configuration
 enum TerminalApp: Hashable {
+    case builtIn
     case terminal
     case ghostty
     case iterm
@@ -12,6 +13,7 @@ enum TerminalApp: Hashable {
 
     var id: String {
         switch self {
+        case .builtIn: return "builtIn"
         case .terminal: return "terminal"
         case .ghostty: return "ghostty"
         case .iterm: return "iterm"
@@ -21,6 +23,20 @@ enum TerminalApp: Hashable {
 
     var displayName: String {
         switch self {
+        case .builtIn: return "Terminal (built-in)"
+        case .terminal: return "Terminal (external)"
+        case .ghostty: return "Ghostty (external)"
+        case .iterm: return "iTerm (external)"
+        case .custom(let path):
+            let name = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+            return "\(name) (external)"
+        }
+    }
+
+    /// Name without the "(external)" suffix — used in onboarding disclosure.
+    var shortDisplayName: String {
+        switch self {
+        case .builtIn: return "Built-in Terminal"
         case .terminal: return "Terminal"
         case .ghostty: return "Ghostty"
         case .iterm: return "iTerm"
@@ -31,6 +47,7 @@ enum TerminalApp: Hashable {
 
     var iconName: String {
         switch self {
+        case .builtIn: return "terminal"
         case .terminal: return "terminal"
         case .ghostty: return "terminal"
         case .iterm: return "terminal"
@@ -40,6 +57,7 @@ enum TerminalApp: Hashable {
 
     var bundleIdentifier: String {
         switch self {
+        case .builtIn: return ""
         case .terminal: return "com.apple.Terminal"
         case .ghostty: return "com.mitchellh.ghostty"
         case .iterm: return "com.googlecode.iterm2"
@@ -47,8 +65,14 @@ enum TerminalApp: Hashable {
         }
     }
 
+    var isBuiltIn: Bool {
+        if case .builtIn = self { return true }
+        return false
+    }
+
     var isAvailable: Bool {
         switch self {
+        case .builtIn: return true
         case .custom(let path):
             return FileManager.default.fileExists(atPath: path)
         default:
@@ -56,9 +80,9 @@ enum TerminalApp: Hashable {
         }
     }
 
-    /// Missing saved terminals fall back to Terminal so launches still work.
+    /// Missing saved terminals fall back to built-in so launches still work.
     var resolvedFallback: TerminalApp {
-        isAvailable ? self : .terminal
+        isAvailable ? self : .builtIn
     }
 
     /// Persist to settings as a string
@@ -67,6 +91,7 @@ enum TerminalApp: Hashable {
     /// Restore from settings string
     static func from(_ value: String) -> TerminalApp {
         switch value {
+        case "builtIn": return .builtIn
         case "terminal": return .terminal
         case "ghostty": return .ghostty
         case "iterm": return .iterm
@@ -80,16 +105,21 @@ struct OnboardingView: View {
     var onComplete: () -> Void
 
     @State private var currentStep = 0
-    @State private var selectedTerminal: TerminalApp = .terminal
+    @State private var selectedTerminal: TerminalApp = .builtIn
     @State private var selectedAgent: AIAgent = .claudeCode
     @State private var detectedTerminals: [TerminalApp] = []
     @State private var showCustomPicker = false
+    @State private var showExternalTerminals = false
     @State private var skipAgentPermissions: Bool
+    @State private var whitelistBlitzMCPTools: Bool
+    @State private var allowASCCLICalls: Bool
 
     init(appState: AppState, onComplete: @escaping () -> Void) {
         self.appState = appState
         self.onComplete = onComplete
         _skipAgentPermissions = State(initialValue: appState.settingsStore.skipAgentPermissions)
+        _whitelistBlitzMCPTools = State(initialValue: appState.settingsStore.whitelistBlitzMCPTools)
+        _allowASCCLICalls = State(initialValue: appState.settingsStore.allowASCCLICalls)
     }
 
     // ASC setup state
@@ -226,40 +256,9 @@ struct OnboardingView: View {
             // Right: configuration options
             ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 12) {
-                // Terminal selection
+                // Agent CLI selection (first — most users care about this)
                 VStack(alignment: .leading, spacing: 6) {
-                    Label("Default Terminal", systemImage: "terminal")
-                        .font(.headline)
-
-                    VStack(spacing: 2) {
-                        ForEach(detectedTerminals, id: \.self) { terminal in
-                            terminalRow(terminal)
-                        }
-
-                        // Custom picker button
-                        Button {
-                            showCustomPicker = true
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "folder")
-                                    .frame(width: 20)
-                                Text("Choose Custom...")
-                                Spacer()
-                            }
-                            .padding(.vertical, 4)
-                            .padding(.horizontal, 10)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                    }
-                }
-
-                Divider()
-
-                // Agent CLI selection
-                VStack(alignment: .leading, spacing: 6) {
-                    Label("Default AI Agent", systemImage: "cpu")
+                    Text("Default AI Agent")
                         .font(.headline)
 
                     VStack(spacing: 2) {
@@ -271,8 +270,6 @@ struct OnboardingView: View {
 
                 // Skip permissions toggle (only if agent supports it)
                 if selectedAgent.skipPermissionsFlag != nil {
-                    Divider()
-
                     Toggle(isOn: $skipAgentPermissions) {
                         VStack(alignment: .leading, spacing: 1) {
                             Text("Skip agent permissions")
@@ -281,11 +278,93 @@ struct OnboardingView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .toggleStyle(.switch)
                     .controlSize(.small)
                 }
 
+                // Whitelist Blitz MCP tools
+                Toggle(isOn: $whitelistBlitzMCPTools) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Allow all Blitz MCP tool calls")
+                            .font(.callout)
+                        Text("AI agents run Blitz tools without asking. Blitz still shows its own approval for destructive actions.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+
+                Toggle(isOn: $allowASCCLICalls) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Allow all ASC CLI calls")
+                            .font(.callout)
+                        Text("Whitelists shell commands starting with `asc` for agents.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+
+                Divider()
+
+                // Terminal selection
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Terminal")
+                        .font(.headline)
+
+                    // Built-in (recommended) — always shown
+                    terminalRow(.builtIn, label: "Built-in Terminal (recommended)")
+
+                    // External terminals — collapsed under clickable header
+                    VStack(alignment: .leading, spacing: 2) {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showExternalTerminals.toggle()
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "chevron.right")
+                                    .font(.caption2.weight(.semibold))
+                                    .rotationEffect(.degrees(showExternalTerminals ? 90 : 0))
+                                Text("Use external terminal")
+                                    .font(.callout)
+                            }
+                            .foregroundStyle(.secondary)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.leading, 10)
+                        .padding(.vertical, 4)
+
+                        if showExternalTerminals {
+                            ForEach(externalTerminals, id: \.self) { terminal in
+                                terminalRow(terminal, label: terminal.shortDisplayName)
+                            }
+
+                            Button {
+                                showCustomPicker = true
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: "folder")
+                                        .frame(width: 20)
+                                    Text("Choose Custom...")
+                                    Spacer()
+                                }
+                                .padding(.vertical, 4)
+                                .padding(.horizontal, 10)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
             .padding(.horizontal, 24)
             .padding(.vertical, 10)
@@ -306,7 +385,11 @@ struct OnboardingView: View {
         }
     }
 
-    private func terminalRow(_ terminal: TerminalApp) -> some View {
+    private var externalTerminals: [TerminalApp] {
+        detectedTerminals.filter { !$0.isBuiltIn }
+    }
+
+    private func terminalRow(_ terminal: TerminalApp, label: String? = nil) -> some View {
         let isSelected = selectedTerminal == terminal
         return Button {
             selectedTerminal = terminal
@@ -314,7 +397,7 @@ struct OnboardingView: View {
             HStack(spacing: 10) {
                 terminalIcon(for: terminal)
                     .frame(width: 20, height: 20)
-                Text(terminal.displayName)
+                Text(label ?? terminal.displayName)
                     .font(.body)
                 Spacer()
                 if isSelected {
@@ -332,7 +415,11 @@ struct OnboardingView: View {
 
     @ViewBuilder
     private func terminalIcon(for terminal: TerminalApp) -> some View {
-        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminal.bundleIdentifier) {
+        if terminal.isBuiltIn {
+            Image(systemName: "terminal.fill")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+        } else if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminal.bundleIdentifier) {
             let icon = NSWorkspace.shared.icon(forFile: appURL.path)
             Image(nsImage: icon)
                 .resizable()
@@ -608,9 +695,18 @@ struct OnboardingView: View {
         }
     }
 
+    /// Resolve the terminal for onboarding context where the built-in split pane
+    /// is unavailable due to the small window size.
+    private var onboardingTerminal: TerminalApp {
+        let resolved = selectedTerminal.resolvedFallback
+        guard resolved.isBuiltIn else { return resolved }
+        // Built-in can't render in the onboarding window — fall back to Terminal.app
+        return .terminal
+    }
+
     private func launchASCSetupWithAI() {
         let agent = selectedAgent
-        let terminal = selectedTerminal.resolvedFallback
+        let terminal = onboardingTerminal
         let prompt = "Use the /asc-team-key-create skill to create a new App Store Connect API key, then call the asc_set_credentials MCP tool to fill the form so I can verify and save."
         TerminalLauncher.launch(
             projectPath: BlitzPaths.mcps.path,
@@ -643,7 +739,7 @@ struct OnboardingView: View {
         VStack(spacing: 6) {
             slideHeader(
                 title: "Ask AI from Any Tab",
-                subtitle: "Click \"Ask AI\" to launch \(selectedAgent.displayName) in \(selectedTerminal.displayName)."
+                subtitle: "Click \"Ask AI\" to launch \(selectedAgent.displayName) in \(selectedTerminal.isBuiltIn ? "the built-in terminal" : selectedTerminal.displayName)."
             )
 
             // Demo video — transparent background, aspect fit
@@ -799,10 +895,10 @@ struct OnboardingView: View {
     // MARK: - Logic
 
     private func detectTerminals() -> [TerminalApp] {
-        var found: [TerminalApp] = []
+        var found: [TerminalApp] = [.builtIn]
         let ws = NSWorkspace.shared
 
-        // Always include macOS Terminal
+        // macOS Terminal
         if ws.urlForApplication(withBundleIdentifier: "com.apple.Terminal") != nil {
             found.append(.terminal)
         }
@@ -853,8 +949,19 @@ struct OnboardingView: View {
         settings.defaultTerminal = selectedTerminal.settingsValue
         settings.defaultAgentCLI = selectedAgent.rawValue
         settings.skipAgentPermissions = skipAgentPermissions
+        settings.whitelistBlitzMCPTools = whitelistBlitzMCPTools
+        settings.allowASCCLICalls = allowASCCLICalls
         settings.hasCompletedOnboarding = true
         settings.save()
+
+        let whitelistBlitzMCP = whitelistBlitzMCPTools
+        let allowASCCLI = allowASCCLICalls
+        Task.detached(priority: .utility) {
+            ProjectStorage().ensureGlobalMCPConfigs(
+                whitelistBlitzMCP: whitelistBlitzMCP,
+                allowASCCLICalls: allowASCCLI
+            )
+        }
 
         // Also persist agent selection to AppStorage for ConnectAIPopover
         UserDefaults.standard.set(selectedAgent.rawValue, forKey: "selectedAIAgent")

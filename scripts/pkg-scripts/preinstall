@@ -285,10 +285,6 @@ Xcode -> Settings -> Platforms")
 fi
 echo "TIMING: simulator check took $(( $(date +%s) - T_STEP ))s" >> "$LOG"
 
-# ============================================================================
-# Report results
-# ============================================================================
-
 if [ ${#ERRORS[@]} -gt 0 ]; then
     MSG="Blitz requires the following to be fixed before installation:\n\n"
     for i in "${!ERRORS[@]}"; do

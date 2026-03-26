@@ -3,6 +3,7 @@ import SwiftUI
 /// Multi-phase inline view for registering a bundle ID, enabling capabilities,
 /// and guiding the user to create their app in App Store Connect.
 struct BundleIDSetupView: View {
+    var appState: AppState
     var asc: ASCManager
     var tab: AppTab
     var platform: ProjectPlatform = .iOS
@@ -540,7 +541,22 @@ struct BundleIDSetupView: View {
         let settings = SettingsService.shared
         let agent = AIAgent(rawValue: settings.defaultAgentCLI) ?? .claudeCode
         let terminal = settings.resolveDefaultTerminal().terminal
-        TerminalLauncher.launch(projectPath: projectPath, agent: agent, terminal: terminal, prompt: prompt)
+
+        if terminal.isBuiltIn {
+            appState.showTerminal = true
+            let session = appState.terminalManager.createSession(projectPath: projectPath)
+            let command = TerminalLauncher.buildAgentCommand(
+                projectPath: projectPath,
+                agent: agent,
+                prompt: prompt,
+                skipPermissions: settings.skipAgentPermissions
+            )
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                session.sendCommand(command)
+            }
+        } else {
+            TerminalLauncher.launch(projectPath: projectPath, agent: agent, terminal: terminal, prompt: prompt, skipPermissions: settings.skipAgentPermissions)
+        }
     }
 
     // MARK: - Helpers

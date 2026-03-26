@@ -360,6 +360,7 @@ actor BuildPipelineService {
                 "-keypbe", "PBE-SHA1-3DES",
                 "-macalg", "SHA1"
             ], timeout: 30)
+
             try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: p12Path)
 
             // Import to keychain
@@ -398,7 +399,7 @@ actor BuildPipelineService {
     }
 
     /// Update only PRODUCT_BUNDLE_IDENTIFIER in the project's pbxproj.
-    /// Public so it can be called from MCPToolExecutor when the user changes bundle ID.
+    /// Public so it can be called from MCPExecutor when the user changes bundle ID.
     func updateBundleIdInPbxproj(projectPath: String, bundleId: String) {
         let projectURL = URL(fileURLWithPath: projectPath).resolvingSymlinksInPath()
         var searchDirs = [projectURL]

@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import AppKit
 
 // MARK: - Credentials
 
@@ -20,15 +21,33 @@ struct ASCCredentials: Codable {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let data = try JSONEncoder().encode(self)
         try data.write(to: url, options: .atomic)
+        try ASCAuthBridge().syncCredentials(self)
     }
 
     static func delete() {
         try? FileManager.default.removeItem(at: credentialsURL())
+        cleanupLegacyPrivateKeys()
+        ASCAuthBridge().cleanup()
     }
 
     static func credentialsURL() -> URL {
         let home = FileManager.default.homeDirectoryForCurrentUser
         return home.appendingPathComponent(".blitz/asc-credentials.json")
+    }
+
+    private static func cleanupLegacyPrivateKeys() {
+        let fm = FileManager.default
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let blitzRoot = home.appendingPathComponent(".blitz")
+        guard let entries = try? fm.contentsOfDirectory(
+            at: blitzRoot,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+
+        for entry in entries where entry.lastPathComponent.hasPrefix("AuthKey_") && entry.pathExtension == "p8" {
+            try? fm.removeItem(at: entry)
+        }
     }
 }
 
@@ -89,6 +108,7 @@ struct ASCAppStoreVersion: Decodable, Identifiable {
 
 enum ASCSubmissionHistoryEventType: String, Codable {
     case submitted
+    case submissionError
     case inReview
     case processing
     case accepted
@@ -244,6 +264,25 @@ struct ASCScreenshot: Decodable, Identifiable {
         if state == "FAILED" { return "Upload failed" }
         return nil
     }
+}
+
+struct TrackSlot: Identifiable, Equatable {
+    let id: String              // UUID for local, ASC id for uploaded
+    var localPath: String?      // file path for local assets
+    var localImage: NSImage?    // loaded thumbnail
+    var ascScreenshot: ASCScreenshot?  // present if from ASC
+    var isFromASC: Bool         // true if this slot was loaded from ASC
+
+    static func == (lhs: TrackSlot, rhs: TrackSlot) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
+struct LocalScreenshotAsset: Identifiable {
+    let id: UUID
+    let url: URL
+    let image: NSImage
+    let fileName: String
 }
 
 // MARK: - CustomerReview
@@ -421,14 +460,23 @@ struct SubmissionReadiness {
         let id: String
         let label: String
         let value: String?
+        let isLoading: Bool
         let required: Bool
         let actionUrl: String?  // If set, shows an "Open in ASC" button
         let hint: String?       // Agent-visible guidance for resolving this field
 
-        init(label: String, value: String?, required: Bool = true, actionUrl: String? = nil, hint: String? = nil) {
+        init(
+            label: String,
+            value: String?,
+            isLoading: Bool = false,
+            required: Bool = true,
+            actionUrl: String? = nil,
+            hint: String? = nil
+        ) {
             self.id = label
             self.label = label
             self.value = value
+            self.isLoading = isLoading
             self.required = required
             self.actionUrl = actionUrl
             self.hint = hint
@@ -438,11 +486,11 @@ struct SubmissionReadiness {
     var fields: [FieldStatus]
 
     var isComplete: Bool {
-        fields.filter(\.required).allSatisfy { $0.value != nil && !($0.value!.isEmpty) }
+        fields.filter(\.required).allSatisfy { !$0.isLoading && $0.value != nil && !($0.value!.isEmpty) }
     }
 
     var missingRequired: [FieldStatus] {
-        fields.filter { $0.required && ($0.value == nil || $0.value!.isEmpty) }
+        fields.filter { $0.required && !$0.isLoading && ($0.value == nil || $0.value!.isEmpty) }
     }
 }
 
@@ -608,162 +656,4 @@ struct ASCProfile: Decodable, Identifiable {
         let profileState: String?
     }
     let attributes: Attributes
-}
-
-// MARK: - Iris Session (Apple ID cookie-based auth for internal APIs)
-
-struct IrisSession: Codable, Sendable {
-    var cookies: [IrisCookie]
-    var email: String?
-    var capturedAt: Date
-
-    struct IrisCookie: Codable, Sendable {
-        let name: String
-        let value: String
-        let domain: String
-        let path: String
-    }
-
-    private static let keychainService = "dev.blitz.iris-session"
-    private static let keychainAccount = "iris-cookies"
-
-    static func load() -> IrisSession? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: keychainAccount,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let data = result as? Data else { return nil }
-        return try? JSONDecoder().decode(IrisSession.self, from: data)
-    }
-
-    func save() throws {
-        let data = try JSONEncoder().encode(self)
-        // Delete any existing item first
-        Self.delete()
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.keychainService,
-            kSecAttrAccount as String: Self.keychainAccount,
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-        ]
-        let status = SecItemAdd(query as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw NSError(domain: "IrisSession", code: Int(status),
-                          userInfo: [NSLocalizedDescriptionKey: "Failed to save session to Keychain (status: \(status))"])
-        }
-    }
-
-    static func delete() {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: keychainService,
-            kSecAttrAccount as String: keychainAccount,
-        ]
-        SecItemDelete(query as CFDictionary)
-    }
-}
-
-// MARK: - Iris API Response Models
-
-struct IrisResolutionCenterThread: Decodable, Identifiable {
-    let id: String
-    let attributes: Attributes
-
-    struct Attributes: Decodable {
-        let state: String?
-        let createdDate: String?
-    }
-}
-
-struct IrisResolutionCenterMessage: Decodable, Identifiable {
-    let id: String
-    let attributes: Attributes
-
-    struct Attributes: Decodable {
-        let messageBody: String?
-        let createdDate: String?
-    }
-}
-
-struct IrisReviewRejection: Decodable, Identifiable {
-    let id: String
-    let attributes: Attributes
-
-    struct Attributes: Decodable {
-        let reasons: [Reason]?
-    }
-
-    struct Reason: Decodable {
-        let reasonSection: String?
-        let reasonDescription: String?
-        let reasonCode: String?
-    }
-}
-
-// MARK: - Iris Feedback Cache
-
-struct IrisFeedbackCache: Codable {
-    let appId: String
-    let versionString: String
-    let fetchedAt: Date
-    let messages: [CachedMessage]
-    let reasons: [CachedReason]
-
-    struct CachedMessage: Codable {
-        let body: String
-        let date: String?
-    }
-
-    struct CachedReason: Codable {
-        let section: String
-        let description: String
-        let code: String
-    }
-
-    // MARK: - Persistence
-
-    func save() throws {
-        let url = Self.cacheURL(appId: appId, versionString: versionString)
-        let dir = url.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(self)
-        try data.write(to: url, options: .atomic)
-    }
-
-    static func load(appId: String, versionString: String) -> IrisFeedbackCache? {
-        let url = cacheURL(appId: appId, versionString: versionString)
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(IrisFeedbackCache.self, from: data)
-    }
-
-    static func loadAll(appId: String) -> [IrisFeedbackCache] {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".blitz/iris-cache/\(appId)")
-        guard let urls = try? FileManager.default.contentsOfDirectory(
-            at: dir,
-            includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        ) else { return [] }
-
-        return urls
-            .filter { $0.pathExtension == "json" }
-            .compactMap { url in
-                guard let data = try? Data(contentsOf: url) else { return nil }
-                return try? JSONDecoder().decode(IrisFeedbackCache.self, from: data)
-            }
-            .sorted { $0.fetchedAt > $1.fetchedAt }
-    }
-
-    private static func cacheURL(appId: String, versionString: String) -> URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return home.appendingPathComponent(".blitz/iris-cache/\(appId)/\(versionString).json")
-    }
 }

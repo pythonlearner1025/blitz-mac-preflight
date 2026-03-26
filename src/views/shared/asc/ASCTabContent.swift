@@ -2,13 +2,22 @@ import SwiftUI
 
 /// Wraps a tab's content with loading, error, and empty-app states.
 struct ASCTabContent<Content: View>: View {
+    var appState: AppState
     var asc: ASCManager
     var tab: AppTab
     var platform: ProjectPlatform = .iOS
     @ViewBuilder var content: () -> Content
 
+    private var isLoading: Bool {
+        asc.isTabLoading(tab)
+    }
+
+    private var shouldRenderContentWhileLoading: Bool {
+        asc.credentials != nil && asc.app != nil
+    }
+
     var body: some View {
-        if asc.isLoadingTab[tab] == true || asc.isLoadingApp {
+        if isLoading && !shouldRenderContentWhileLoading {
             VStack(spacing: 12) {
                 ProgressView()
                 Text("Loading\u{2026}")
@@ -16,10 +25,10 @@ struct ASCTabContent<Content: View>: View {
                     .font(.callout)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if asc.app == nil && asc.credentials != nil {
+        } else if asc.app == nil && asc.credentials != nil && !isLoading {
             // App not found — show bundle ID setup instead of flashing content
-            BundleIDSetupView(asc: asc, tab: tab, platform: platform)
-        } else if let error = asc.tabError[tab] {
+            BundleIDSetupView(appState: appState, asc: asc, tab: tab, platform: platform)
+        } else if let error = asc.tabError[tab], !asc.hasLoadedTabData(tab) {
             VStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 32))
@@ -39,7 +48,83 @@ struct ASCTabContent<Content: View>: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             content()
+                .overlay(alignment: .topTrailing) {
+                    if isLoading && shouldRenderContentWhileLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(.background.secondary, in: Capsule())
+                            .padding(12)
+                    }
+                }
+                .overlay(alignment: .topLeading) {
+                    if let error = asc.tabError[tab], asc.hasLoadedTabData(tab) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            Text(error)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                            Button("Retry") {
+                                Task { await asc.refreshTabData(tab) }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.mini)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
+                        .padding(12)
+                    }
+                }
         }
+    }
+}
+
+struct ASCTabLoadingPlaceholder: View {
+    var title: String
+    var message: String
+
+    var body: some View {
+        VStack(spacing: 10) {
+            ProgressView()
+            Text(title)
+                .font(.callout.weight(.medium))
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(32)
+    }
+}
+
+struct ASCTabRefreshButton: View {
+    var asc: ASCManager
+    var tab: AppTab
+    var helpText: String = "Refresh this tab"
+
+    private var isRefreshing: Bool {
+        asc.isLoadingTab[tab] == true
+    }
+
+    var body: some View {
+        Button {
+            Task { await asc.refreshTabData(tab) }
+        } label: {
+            if isRefreshing {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Image(systemName: "arrow.clockwise")
+            }
+        }
+        .buttonStyle(.borderless)
+        .disabled(isRefreshing)
+        .help(helpText)
     }
 }
 

@@ -96,25 +96,41 @@ struct ScreenshotsView: View {
 
     var body: some View {
         ASCCredentialGate(
+            appState: appState,
             ascManager: asc,
             projectId: appState.activeProjectId ?? "",
             bundleId: appState.activeProject?.metadata.bundleIdentifier
         ) {
-            ASCTabContent(asc: asc, tab: .screenshots, platform: appState.activeProject?.platform ?? .iOS) {
-                HStack(spacing: 0) {
-                    assetLibraryPanel
-                        .frame(width: 220)
+            ASCTabContent(appState: appState, asc: asc, tab: .screenshots, platform: appState.activeProject?.platform ?? .iOS) {
+                VStack(spacing: 0) {
+                    HStack {
+                        Text("Screenshots")
+                            .font(.title2.weight(.semibold))
+                        Spacer()
+                        ASCTabRefreshButton(asc: asc, tab: .screenshots, helpText: "Refresh screenshots")
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+
                     Divider()
-                    VStack(spacing: 0) {
-                        detailView
+
+                    HStack(spacing: 0) {
+                        assetLibraryPanel
+                            .frame(width: 220)
                         Divider()
-                        trackView
-                            .frame(minHeight: 200)
+                        VStack(spacing: 0) {
+                            detailView
+                            Divider()
+                            trackView
+                                .frame(minHeight: 200)
+                        }
                     }
                 }
             }
         }
-        .task { await loadData() }
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
+            await loadData()
+        }
         .onChange(of: selectedDevice) { _, _ in loadTrackForDevice() }
         .alert("Import Error", isPresented: Binding(
             get: { importError != nil },
@@ -532,12 +548,13 @@ struct ScreenshotsView: View {
             selectedDevice = first
         }
 
-        await asc.fetchTabData(.screenshots)
-
-        // Scan local assets
         if let projectId = appState.activeProjectId {
             asc.scanLocalAssets(projectId: projectId)
         }
+
+        loadTrackForDevice()
+
+        await asc.ensureTabData(.screenshots)
 
         // Load track from ASC
         loadTrackForDevice()
@@ -649,7 +666,6 @@ struct ScreenshotsView: View {
         for provider in providers {
             if provider.canLoadObject(ofClass: NSURL.self) {
                 hasValidProvider = true
-                let ascRef = asc
                 provider.loadObject(ofClass: NSURL.self) { reading, _ in
                     guard let url = reading as? URL,
                           url.isFileURL,
