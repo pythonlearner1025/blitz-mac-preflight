@@ -264,7 +264,7 @@ struct SettingsView: View {
                 ))
 
                 learnMore(isExpanded: $showAskAIDetail) {
-                    Text("When you click \"Ask AI\", Blitz launches \(currentAgent.displayName) in \(currentTerminal.displayName). Right-click the button to open the panel instead.")
+                    Text("When enabled, Blitz automatically sends a context-aware prompt to \(currentAgent.displayName) based on the current tab (e.g. Store Listing, Screenshots, App Review). Disable to start with a blank session.")
                 }
             }
 
