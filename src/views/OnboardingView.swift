@@ -812,6 +812,7 @@ struct OnboardingView: View {
             )
 
             Button("Open System Settings") {
+                AppRelaunchService.shared.prepareForScreenRecordingPermissionRestart()
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
                     NSWorkspace.shared.open(url)
                 }

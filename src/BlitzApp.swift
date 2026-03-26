@@ -4,6 +4,7 @@ final class BlitzAppDelegate: NSObject, NSApplicationDelegate {
     var appState: AppState?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppRelaunchService.shared.clearPendingRestart()
         if let fileMenu = NSApp.mainMenu?.item(withTitle: "File") {
             fileMenu.title = "Project"
         }
@@ -13,11 +14,16 @@ final class BlitzAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        AppRelaunchService.shared.clearPendingRestartAfterReturningToApp()
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        _ = AppRelaunchService.shared.schedulePendingScreenRecordingRelaunchIfNeeded()
         MCPBootstrap.shared.shutdown()
         // Don't block termination with synchronous simctl shutdown —
         // this prevents macOS TCC "Quit & Reopen" from relaunching the app.
