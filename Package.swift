@@ -24,7 +24,7 @@ let package = Package(
             name: "Blitz",
             dependencies: ["SwiftTerm", "BlitzMCPCommon"],
             path: "src",
-            exclude: ["metal"],
+            exclude: ["metal", "resources/skills"],
             resources: [.process("resources"), .copy("templates")],
             linkerSettings: [
                 .linkedFramework("ScreenCaptureKit"),
