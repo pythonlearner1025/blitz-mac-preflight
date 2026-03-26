@@ -1,5 +1,6 @@
 import SwiftUI
 import MetalKit
+import SwiftTerm
 
 /// Main Build tab view — simulator frame display + touch interaction
 struct SimulatorView: View {
@@ -240,9 +241,8 @@ struct SimulatorView: View {
                 return event
             }
 
-            // Don't capture if a text field or other responder has focus
-            if let responder = event.window?.firstResponder,
-               responder is NSTextView || responder is NSTextField {
+            // Don't capture if another text-input surface currently owns focus.
+            if simulatorKeyPassthroughShouldIgnore(event.window?.firstResponder) {
                 return event
             }
 
@@ -263,6 +263,24 @@ struct SimulatorView: View {
 
             return event
         }
+    }
+
+    private func simulatorKeyPassthroughShouldIgnore(_ responder: NSResponder?) -> Bool {
+        guard let responder else { return false }
+
+        if responder is NSTextView || responder is NSTextField || responder is TerminalView {
+            return true
+        }
+
+        var view = responder as? NSView
+        while let current = view {
+            if current is TerminalView {
+                return true
+            }
+            view = current.superview
+        }
+
+        return false
     }
 
     private func removeKeyMonitor() {
