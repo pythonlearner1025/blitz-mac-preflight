@@ -44,7 +44,7 @@ final class TeenybaseProcessService {
             return
         }
 
-        let env = buildEnvironment(projectPath: projectPath)
+        let env = TeenybaseProjectEnvironment.environment(projectPath: projectPath, port: port)
 
         // Kill anything already on the port
         await killPort(port)
@@ -117,38 +117,6 @@ final class TeenybaseProcessService {
             currentDirectory: projectPath,
             timeout: 60
         )
-    }
-
-    private func buildEnvironment(projectPath: String) -> [String: String] {
-        var env = ProcessInfo.processInfo.environment
-        // Ensure project's local binaries are first in PATH
-        let localBin = projectPath + "/node_modules/.bin"
-        if let existing = env["PATH"] {
-            env["PATH"] = localBin + ":" + existing
-        } else {
-            env["PATH"] = localBin
-        }
-        // Standard overrides
-        env["TEENY_DEV_PORT"] = String(port)
-        env["WRANGLER_SEND_METRICS"] = "false"
-        // Load .dev.vars into environment
-        loadDevVars(projectPath: projectPath, into: &env)
-        return env
-    }
-
-    private func loadDevVars(projectPath: String, into env: inout [String: String]) {
-        let path = projectPath + "/.dev.vars"
-        guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return }
-        for line in content.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else { continue }
-            let parts = trimmed.split(separator: "=", maxSplits: 1)
-            guard parts.count == 2 else { continue }
-            let key = String(parts[0]).trimmingCharacters(in: .whitespaces)
-            let value = String(parts[1]).trimmingCharacters(in: .whitespaces)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-            env[key] = value
-        }
     }
 
     private func waitForHealth(port: Int, timeout: Int) async -> Bool {

@@ -9,10 +9,10 @@ actor MCPServerService {
     private var serverSocket: Int32 = -1
     private(set) var isRunning = false
 
-    private let toolExecutor: MCPToolExecutor
+    private let toolExecutor: MCPExecutor
 
     init(appState: AppState) {
-        self.toolExecutor = MCPToolExecutor(appState: appState)
+        self.toolExecutor = MCPExecutor(appState: appState)
 
         Task { @MainActor in
             appState.toolExecutor = self.toolExecutor
@@ -235,7 +235,7 @@ actor MCPServerService {
 
         case "tools/list":
             result = [
-                "tools": MCPToolRegistry.allTools()
+                "tools": MCPRegistry.allTools()
             ]
 
         case "tools/call":

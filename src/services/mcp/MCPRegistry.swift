@@ -1,7 +1,7 @@
 import Foundation
 
 /// Static definitions for all MCP tools exposed by Blitz
-enum MCPToolRegistry {
+enum MCPRegistry {
 
     /// Returns all tool definitions for the MCP tools/list response
     static func allTools() -> [[String: Any]] {
