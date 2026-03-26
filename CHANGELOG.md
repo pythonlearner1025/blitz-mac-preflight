@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.30
+- New built-in terminal with tabs, split view, and better AI launch flow
+- New Dashboard and App navigation, plus faster project switching
+- Faster and more reliable App Store Connect workflows
+- Improved release/update reliability and simulator behavior
+
 ## 1.0.29
 - Faster App Store Connect setup with improved onboarding, credential entry, and bundle ID guidance
 - Better review workflows with rejection feedback in Overview and Review, plus a submission history timeline
