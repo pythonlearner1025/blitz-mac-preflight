@@ -93,6 +93,7 @@ struct SimulatorView: View {
 
                     HStack(spacing: 12) {
                         Button("Open System Settings") {
+                            AppRelaunchService.shared.prepareForScreenRecordingPermissionRestart()
                             NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
                         }
                         Button("Retry") {
