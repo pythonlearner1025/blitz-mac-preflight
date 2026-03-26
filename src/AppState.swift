@@ -136,7 +136,7 @@ final class AppState {
     var projectManager = ProjectManager()
     var simulatorManager = SimulatorManager()
     var simulatorStream = SimulatorStreamManager()
-var settingsStore = SettingsService.shared
+    var settingsStore = SettingsService.shared
     var databaseManager = DatabaseManager()
     var projectSetup = ProjectSetupManager()
     var ascManager = ASCManager()

@@ -48,6 +48,15 @@ final class AutoUpdateManager {
     func checkForUpdate() async {
         state = .checking
 
+        // TODO - remove before release: DEBUG use local zip instead of fetching from GitHub
+        // let debugLocalZip = "SET_TO_YOUR_LOCAL_PATH/Blitz.app.zip"
+        // latestVersion = "1.0.30"
+        // downloadURL = "file://\(debugLocalZip)"
+        // downloadFilename = "Blitz.app.zip"
+        // state = .available(version: "1.0.30", releaseNotes: "Debug test update")
+        // return
+        // END DEBUG
+
         do {
             var request = URLRequest(url: URL(string: Self.releasesURL)!)
             request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
