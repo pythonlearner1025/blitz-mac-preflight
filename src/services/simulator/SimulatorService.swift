@@ -72,9 +72,8 @@ actor SimulatorService {
             try await Task.sleep(for: .seconds(1))
         }
 
-        // Open Simulator.app behind Blitz — ScreenCaptureKit needs the window to exist
-        // but it captures occluded windows fine, so it doesn't need to be in front.
-        try await openSimulatorAppBehind()
+        // Open Simulator.app
+        try await openSimulatorApp()
     }
 
     /// Shutdown a simulator
@@ -97,53 +96,10 @@ actor SimulatorService {
         try await simctl.screenshot(udid: udid, path: path)
     }
 
-    /// Open the Simulator.app (brings to foreground — used for initial boot)
+    /// Open the Simulator.app (-g flag opens in background)
     func openSimulatorApp() async throws {
-        _ = try await ProcessRunner.run("open", arguments: ["-a", "Simulator"])
-        try await Task.sleep(for: .milliseconds(500))
-    }
-
-    /// Open Simulator.app behind Blitz's window.
-    /// Matches blitz-cn: `open -g -a Simulator` then AppleScript to bring Blitz to front.
-    /// Also moves Simulator's window behind Blitz using the Accessibility API.
-    ///
-    /// ScreenCaptureKit captures occluded windows fine, so Simulator
-    /// just needs to exist — it doesn't need to be visible.
-    func openSimulatorAppBehind() async throws {
-        // 1. Capture Blitz's frame for positioning
-        let blitzFrame = await MainActor.run { NSApp.mainWindow?.frame }
-
-        // 2. Open Simulator without bringing to foreground (matches blitz-cn)
         _ = try await ProcessRunner.run("open", arguments: ["-g", "-a", "Simulator"])
-
-        // 3. Immediately bring Blitz to front via AppleScript (matches blitz-cn's hide_simulator_window)
-        Self.bringBlitzToFront()
-
-        // 4. Wait for Simulator window to appear
-        try await Task.sleep(for: .milliseconds(800))
-
-        // 5. Move Simulator window behind Blitz and bring Blitz to front again
-        if let frame = blitzFrame {
-            Self.moveSimulatorWindowBehind(blitzFrame: frame)
-        }
-        Self.bringBlitzToFront()
-    }
-
-    /// Bring Blitz to the foreground using AppleScript (matches blitz-cn's hide_simulator_window).
-    private static func bringBlitzToFront() {
-        let script = """
-        tell application "System Events"
-            repeat with proc in (every process whose background only is false)
-                if name of proc contains "blitz" or name of proc contains "Blitz" then
-                    set frontmost of proc to true
-                    exit repeat
-                end if
-            end repeat
-        end tell
-        """
-        let appleScript = NSAppleScript(source: script)
-        var error: NSDictionary?
-        appleScript?.executeAndReturnError(&error)
+        try await Task.sleep(for: .milliseconds(500))
     }
 
     /// Move Simulator.app's window to the same position as Blitz's window
