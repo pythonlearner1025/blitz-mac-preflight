@@ -4,7 +4,6 @@ import SwiftUI
 struct MCPSetupSection: View {
     let mcpServer: MCPServerService?
 
-    @State private var serverPort: Int = 0
     @State private var serverRunning: Bool = false
     @State private var copied = false
 
@@ -18,7 +17,7 @@ struct MCPSetupSection: View {
                         Circle()
                             .fill(.green)
                             .frame(width: 8, height: 8)
-                        Text("Running on port \(serverPort)")
+                        Text("Ready via local socket")
                             .foregroundStyle(.secondary)
                     }
                 } else {
@@ -55,7 +54,6 @@ struct MCPSetupSection: View {
 
     private func refreshStatus() async {
         guard let server = mcpServer else { return }
-        serverPort = await server.port
         serverRunning = await server.isRunning
     }
 
@@ -64,8 +62,7 @@ struct MCPSetupSection: View {
         let config = """
         {
           "blitz-macos": {
-            "command": "bash",
-            "args": ["\(home)/.blitz/blitz-mcp-bridge.sh"]
+            "command": "\(home)/.blitz/blitz-macos-mcp"
           }
         }
         """

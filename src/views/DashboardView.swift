@@ -1,0 +1,272 @@
+import SwiftUI
+
+struct DashboardView: View {
+    @Bindable var appState: AppState
+    @State private var dashboardSummary = DashboardSummaryStore.shared
+
+    private var projects: [Project] { appState.projectManager.projects }
+    private var summaryHydrationKey: String {
+        let credentialsKey = appState.ascManager.credentials?.keyId ?? "no-creds"
+        let fingerprint = projects
+            .map { "\($0.id):\($0.metadata.bundleIdentifier ?? "")" }
+            .sorted()
+            .joined(separator: "|")
+        return "\(credentialsKey):\(appState.ascManager.credentialActivationRevision):\(fingerprint)"
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Stat cards
+                LazyVGrid(
+                    columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())],
+                    spacing: 12
+                ) {
+                    statCard(
+                        title: "Live on Store",
+                        value: statValue(dashboardSummary.summary.liveCount),
+                        color: .green,
+                        icon: "checkmark.seal.fill"
+                    )
+                    statCard(
+                        title: "Pending Review",
+                        value: statValue(dashboardSummary.summary.pendingCount),
+                        color: .orange,
+                        icon: "clock.fill"
+                    )
+                    statCard(
+                        title: "Rejected Apps",
+                        value: statValue(dashboardSummary.summary.rejectedCount),
+                        color: .red,
+                        icon: "xmark.seal.fill"
+                    )
+                }
+
+                // App grid header
+                HStack {
+                    Text("My Apps")
+                        .font(.title3.weight(.semibold))
+                    Spacer()
+                }
+
+                // App grid
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 140, maximum: 180), spacing: 16)],
+                    spacing: 16
+                ) {
+                    ForEach(projects) { project in
+                        appCard(project: project)
+                            .onTapGesture {
+                                selectProject(project)
+                            }
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(20)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .bottomTrailing) {
+            Button {
+                appState.showNewProjectSheet = true
+            } label: {
+                Label("Create App", systemImage: "plus")
+                    .font(.body.weight(.medium))
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .padding(20)
+        }
+        .overlay(alignment: .topTrailing) {
+            if dashboardSummary.isLoadingSummary {
+                ProgressView()
+                    .controlSize(.small)
+                    .padding(12)
+                    .background(.background.secondary, in: Capsule())
+                    .padding(20)
+            }
+        }
+        .task(id: summaryHydrationKey) {
+            await hydrateSummary()
+        }
+    }
+
+    // MARK: - Stat Card
+
+    private func statCard(title: String, value: String, color: Color, icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.callout)
+                    .foregroundStyle(color)
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Text(value)
+                .font(.system(size: 28, weight: .bold, design: .rounded))
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background.secondary)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    // MARK: - App Card
+
+    private func appCard(project: Project) -> some View {
+        let isSelected = project.id == appState.activeProjectId
+
+        return VStack(spacing: 8) {
+            ProjectAppIconView(project: project, size: 56, cornerRadius: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(projectColor(project).opacity(0.15))
+                    Image(systemName: projectIcon(project))
+                        .font(.system(size: 24))
+                        .foregroundStyle(projectColor(project))
+                }
+            }
+
+            Text(project.name)
+                .font(.callout.weight(.medium))
+                .lineLimit(1)
+
+            statusLabel(for: project)
+                .font(.caption2)
+                .lineLimit(1)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity)
+        .background(isSelected ? Color.accentColor.opacity(0.1) : Color(.controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
+        )
+        .contentShape(Rectangle())
+    }
+
+    // MARK: - Actions
+
+    private func selectProject(_ project: Project) {
+        appState.activeProjectId = project.id
+        let projectId = project.id
+        Task.detached(priority: .utility) {
+            ProjectStorage().updateLastOpened(projectId: projectId)
+        }
+    }
+
+    private func hydrateSummary() async {
+        if projects.isEmpty {
+            await appState.projectManager.loadProjects()
+        }
+
+        let hydrationKey = summaryHydrationKey
+        if dashboardSummary.isLoading(for: hydrationKey) || !dashboardSummary.shouldRefresh(for: hydrationKey) {
+            return
+        }
+
+        let eligibleProjects = appState.projectManager.projects.compactMap { project -> DashboardProjectInput? in
+            guard let bundleId = project.metadata.bundleIdentifier?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !bundleId.isEmpty else {
+                return nil
+            }
+            return DashboardProjectInput(bundleId: bundleId)
+        }
+
+        guard !eligibleProjects.isEmpty else {
+            dashboardSummary.markEmpty(for: hydrationKey)
+            return
+        }
+
+        guard let credentials = ASCCredentials.load() else {
+            dashboardSummary.markUnavailable(for: hydrationKey)
+            return
+        }
+
+        dashboardSummary.beginLoading(for: hydrationKey)
+        var nextSummary = ASCDashboardSummary.empty
+        var nextStatuses: [String: ASCDashboardProjectStatus] = [:]
+        let service = AppStoreConnectService(credentials: credentials)
+
+        for project in eligibleProjects {
+            if Task.isCancelled {
+                dashboardSummary.cancelLoading(for: hydrationKey)
+                return
+            }
+
+            do {
+                let app = try await service.fetchApp(bundleId: project.bundleId)
+                let versions = try await service.fetchAppStoreVersions(appId: app.id)
+                let status = ASCDashboardProjectStatus(versions: versions)
+                nextSummary.include(status)
+                nextStatuses[project.bundleId] = status
+            } catch {
+                continue
+            }
+        }
+
+        if Task.isCancelled {
+            dashboardSummary.cancelLoading(for: hydrationKey)
+            return
+        }
+
+        dashboardSummary.store(summary: nextSummary, projectStatuses: nextStatuses, for: hydrationKey)
+    }
+
+    // MARK: - Helpers
+
+    private func statValue(_ count: Int) -> String {
+        dashboardSummary.hasLoadedSummary ? "\(count)" : (projects.isEmpty ? "0" : "-")
+    }
+
+    @ViewBuilder
+    private func statusLabel(for project: Project) -> some View {
+        let bundleId = project.metadata.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if let status = dashboardSummary.projectStatuses[bundleId] {
+            if status.isRejected {
+                Label("Rejected", systemImage: "xmark.circle.fill")
+                    .foregroundStyle(.red)
+            } else if status.isPendingReview {
+                Label("In Review", systemImage: "clock.fill")
+                    .foregroundStyle(.orange)
+            } else if status.isLiveOnStore {
+                Label("Live", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            } else {
+                Label("Preparing", systemImage: "pencil.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+        } else if dashboardSummary.hasLoadedSummary || bundleId.isEmpty {
+            Text(project.type.rawValue)
+                .foregroundStyle(.secondary)
+        } else {
+            Text(bundleId)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func projectIcon(_ project: Project) -> String {
+        if project.platform == .macOS { return "desktopcomputer" }
+        switch project.type {
+        case .reactNative: return "atom"
+        case .swift: return "swift"
+        case .flutter: return "bird"
+        }
+    }
+
+    private func projectColor(_ project: Project) -> Color {
+        switch project.type {
+        case .reactNative: return .cyan
+        case .swift: return .orange
+        case .flutter: return .blue
+        }
+    }
+
+    private struct DashboardProjectInput: Sendable {
+        let bundleId: String
+    }
+}

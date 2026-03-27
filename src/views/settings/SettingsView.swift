@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var showSkipPermsDetail = false
     @State private var showAskAIDetail = false
     @State private var terminalResetWarning: String?
+    @State private var shellIntegrationError: String?
 
     private let gateableCategories: [(ApprovalRequest.ToolCategory, String)] = [
         (.ascFormMutation, "ASC form editing"),
@@ -119,9 +120,7 @@ struct SettingsView: View {
                 titleVisibility: .visible
             ) {
                 Button("Clear Credentials", role: .destructive) {
-                    if let projectId = appState.ascManager.loadedProjectId {
-                        appState.ascManager.deleteCredentials(projectId: projectId)
-                    }
+                    appState.ascManager.deleteCredentials()
                 }
             } message: {
                 Text("This action cannot be undone. You will need to re-enter your API credentials to access App Store Connect data.")
@@ -140,6 +139,7 @@ struct SettingsView: View {
         .frame(maxWidth: 500)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
+            appState.ascManager.loadStoredCredentialsIfNeeded()
             refreshTerminalResetWarning()
         }
         .fileImporter(
@@ -163,6 +163,10 @@ struct SettingsView: View {
                 Text("Terminal")
                 Spacer()
                 Menu {
+                    terminalMenuItem(.builtIn)
+
+                    Divider()
+
                     terminalMenuItem(.terminal)
 
                     if NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.mitchellh.ghostty") != nil {
@@ -230,6 +234,25 @@ struct SettingsView: View {
                 .fixedSize()
             }
 
+            // Whitelist Blitz MCP tools
+            Toggle("Allow all Blitz MCP tool calls", isOn: Binding(
+                get: { settings.whitelistBlitzMCPTools },
+                set: { newValue in
+                    settings.whitelistBlitzMCPTools = newValue
+                    settings.save()
+                    refreshAgentPermissionFiles()
+                }
+            ))
+
+            Toggle("Allow all ASC CLI calls", isOn: Binding(
+                get: { settings.allowASCCLICalls },
+                set: { newValue in
+                    settings.allowASCCLICalls = newValue
+                    settings.save()
+                    refreshAgentPermissionFiles()
+                }
+            ))
+
             // Send default prompt toggle
             VStack(alignment: .leading, spacing: 4) {
                 Toggle("Send tab-specific prompt on launch", isOn: Binding(
@@ -241,7 +264,7 @@ struct SettingsView: View {
                 ))
 
                 learnMore(isExpanded: $showAskAIDetail) {
-                    Text("When you click \"Ask AI\", Blitz launches \(currentAgent.displayName) in \(currentTerminal.displayName). Right-click the button to open the panel instead.")
+                    Text("When enabled, Blitz automatically sends a context-aware prompt to \(currentAgent.displayName) based on the current tab (e.g. Store Listing, Screenshots, App Review). Disable to start with a blank session.")
                 }
             }
 
@@ -259,6 +282,39 @@ struct SettingsView: View {
                     learnMore(isExpanded: $showSkipPermsDetail) {
                         Text("Launches \(currentAgent.displayName) with \(currentAgent.skipPermissionsFlag ?? ""). The agent will not ask for confirmation before running tools.")
                     }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                let shellIntegration = ShellIntegrationService()
+
+                Toggle("Enable ASC shell integration", isOn: Binding(
+                    get: { settings.enableASCShellIntegration },
+                    set: { newValue in
+                        shellIntegrationError = nil
+                        do {
+                            try settings.setASCShellIntegrationEnabled(newValue)
+                        } catch {
+                            shellIntegrationError = error.localizedDescription
+                        }
+                    }
+                ))
+                .disabled(!shellIntegration.isSupported && !settings.enableASCShellIntegration)
+
+                if shellIntegration.isSupported {
+                    Text("Adds a managed Blitz block to \(shellIntegration.targetRCFileLabel) so manually opened shells can find `asc` on PATH.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Automatic shell integration only supports zsh and bash. Detected \(shellIntegration.shellKind.displayName).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let shellIntegrationError {
+                    Text(shellIntegrationError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
                 }
             }
         }
@@ -291,6 +347,39 @@ struct SettingsView: View {
         }
     }
 
+    private func refreshAgentPermissionFiles() {
+        let whitelistBlitzMCP = settings.whitelistBlitzMCPTools
+        let allowASCCLICalls = settings.allowASCCLICalls
+        let activeProjectId = appState.activeProjectId
+        let activeProjectType = appState.activeProject?.type
+
+        Task.detached(priority: .utility) {
+            let storage = ProjectStorage()
+            storage.ensureGlobalMCPConfigs(
+                whitelistBlitzMCP: whitelistBlitzMCP,
+                allowASCCLICalls: allowASCCLICalls
+            )
+            storage.ensureAllProjectMCPConfigs(
+                whitelistBlitzMCP: whitelistBlitzMCP,
+                allowASCCLICalls: allowASCCLICalls
+            )
+
+            if let activeProjectId, let activeProjectType {
+                storage.ensureMCPConfig(
+                    projectId: activeProjectId,
+                    whitelistBlitzMCP: whitelistBlitzMCP,
+                    allowASCCLICalls: allowASCCLICalls
+                )
+                storage.ensureClaudeFiles(
+                    projectId: activeProjectId,
+                    projectType: activeProjectType,
+                    whitelistBlitzMCP: whitelistBlitzMCP,
+                    allowASCCLICalls: allowASCCLICalls
+                )
+            }
+        }
+    }
+
     private func terminalMenuItem(_ terminal: TerminalApp) -> some View {
         Button {
             terminalResetWarning = nil
@@ -307,7 +396,10 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func terminalAppIcon(_ terminal: TerminalApp, size: CGFloat) -> some View {
-        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminal.bundleIdentifier) {
+        if terminal.isBuiltIn {
+            Image(systemName: "terminal.fill")
+                .frame(width: size, height: size)
+        } else if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminal.bundleIdentifier) {
             let icon = Self.resizedIcon(NSWorkspace.shared.icon(forFile: appURL.path), size: size)
             Image(nsImage: icon)
         } else if case .custom(let path) = terminal {

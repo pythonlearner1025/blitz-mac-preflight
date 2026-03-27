@@ -48,6 +48,15 @@ final class AutoUpdateManager {
     func checkForUpdate() async {
         state = .checking
 
+        // TODO - remove before release: DEBUG use local zip instead of fetching from GitHub
+        // let debugLocalZip = "SET_TO_YOUR_LOCAL_PATH/Blitz.app.zip"
+        // latestVersion = "1.0.30"
+        // downloadURL = "file://\(debugLocalZip)"
+        // downloadFilename = "Blitz.app.zip"
+        // state = .available(version: "1.0.30", releaseNotes: "Debug test update")
+        // return
+        // END DEBUG
+
         do {
             var request = URLRequest(url: URL(string: Self.releasesURL)!)
             request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
@@ -169,27 +178,11 @@ final class AutoUpdateManager {
 
     private func installApp(zipPath: URL) async throws {
         let pid = ProcessInfo.processInfo.processIdentifier
-        let zip = zipPath.path.replacingOccurrences(of: "'", with: "'\\''")
 
         // AppleScript statement 1: unzip, run preinstall, replace app, run postinstall
         // The PKG postinstall chowns Blitz.app to the current user, so no admin needed.
         // Pre/postinstall scripts are embedded in the .app at Contents/Resources/pkg-scripts/.
-        let installScript = """
-        do shell script "\
-        TMPZIP='\(zip)'; \
-        UNZIP_DIR=$(mktemp -d); \
-        unzip -qo \\"$TMPZIP\\" -d \\"$UNZIP_DIR\\"; \
-        APP_SRC=$(find \\"$UNZIP_DIR\\" -maxdepth 1 -name '*.app' -type d | head -1); \
-        if [ -z \\"$APP_SRC\\" ]; then rm -rf \\"$UNZIP_DIR\\"; exit 1; fi; \
-        PREINSTALL=\\"$APP_SRC/Contents/Resources/pkg-scripts/preinstall\\"; \
-        if [ -x \\"$PREINSTALL\\" ]; then \\"$PREINSTALL\\" '' '' '/' >> /tmp/blitz_install.log 2>&1 || true; fi; \
-        rm -rf /Applications/Blitz.app; \
-        mv \\"$APP_SRC\\" /Applications/Blitz.app; \
-        POSTINSTALL='/Applications/Blitz.app/Contents/Resources/pkg-scripts/postinstall'; \
-        if [ -x \\"$POSTINSTALL\\" ]; then \\"$POSTINSTALL\\" '' '' '/' >> /tmp/blitz_install.log 2>&1 || true; fi; \
-        rm -rf \\"$UNZIP_DIR\\" \\"$TMPZIP\\"\
-        "
-        """
+        let installScript = Self.appUpdateInstallScript(zipPath: zipPath)
 
         // AppleScript statement 2: background wait-for-exit + relaunch
         let relaunchScript = """
@@ -283,5 +276,33 @@ final class AutoUpdateManager {
     struct UpdateError: LocalizedError {
         let message: String
         var errorDescription: String? { message }
+    }
+
+    static func appUpdateInstallScript(zipPath: URL) -> String {
+        let zip = shellLiteral(zipPath.path)
+        return """
+        do shell script "set -eu; \
+        TMPZIP=\(zip); \
+        UPDATE_LOG='/tmp/blitz_install.log'; \
+        UNZIP_DIR=$(mktemp -d); \
+        cleanup() { rm -rf \\"$UNZIP_DIR\\" \\"$TMPZIP\\"; }; \
+        trap cleanup EXIT; \
+        unzip -qo \\"$TMPZIP\\" -d \\"$UNZIP_DIR\\"; \
+        APP_SRC=$(find \\"$UNZIP_DIR\\" -maxdepth 1 -name '*.app' -type d | head -1); \
+        if [ -z \\"$APP_SRC\\" ]; then echo 'Update failed: extracted app not found' >> \\"$UPDATE_LOG\\"; exit 1; fi; \
+        BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \\"$APP_SRC/Contents/Info.plist\\" 2>> \\"$UPDATE_LOG\\" || true); \
+        if [ \\"$BUNDLE_ID\\" != 'com.blitz.macos' ]; then echo 'Update failed: unexpected bundle identifier' >> \\"$UPDATE_LOG\\"; exit 1; fi; \
+        if [ ! -x \\"$APP_SRC/Contents/Helpers/ascd\\" ]; then echo 'Update failed: bundled ascd helper missing' >> \\"$UPDATE_LOG\\"; exit 1; fi; \
+        PREINSTALL=\\"$APP_SRC/Contents/Resources/pkg-scripts/preinstall\\"; \
+        if [ -x \\"$PREINSTALL\\" ]; then BLITZ_UPDATE_CONTEXT='auto-update' \\"$PREINSTALL\\" '' '' '/' >> \\"$UPDATE_LOG\\" 2>&1; fi; \
+        rm -rf /Applications/Blitz.app; \
+        mv \\"$APP_SRC\\" /Applications/Blitz.app; \
+        POSTINSTALL='/Applications/Blitz.app/Contents/Resources/pkg-scripts/postinstall'; \
+        if [ -x \\"$POSTINSTALL\\" ]; then BLITZ_UPDATE_CONTEXT='auto-update' \\"$POSTINSTALL\\" '' '' '/' >> \\"$UPDATE_LOG\\" 2>&1; fi"
+        """
+    }
+
+    private static func shellLiteral(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }

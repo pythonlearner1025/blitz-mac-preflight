@@ -60,15 +60,18 @@ struct ReviewView: View {
 
     var body: some View {
         ASCCredentialGate(
+            appState: appState,
             ascManager: asc,
             projectId: appState.activeProjectId ?? "",
             bundleId: appState.activeProject?.metadata.bundleIdentifier
         ) {
-            ASCTabContent(asc: asc, tab: .review, platform: appState.activeProject?.platform ?? .iOS) {
+            ASCTabContent(appState: appState, asc: asc, tab: .review, platform: appState.activeProject?.platform ?? .iOS) {
                 reviewContent
             }
         }
-        .task { await asc.fetchTabData(.review) }
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
+            await asc.ensureTabData(.review)
+        }
         .onChange(of: asc.appStoreVersions.map(\.id)) { _, _ in
             guard let appId = asc.app?.id else { return }
             // Load cached rejection feedback for the pending version
@@ -86,9 +89,17 @@ struct ReviewView: View {
     @ViewBuilder
     private var reviewContent: some View {
         let latest = asc.appStoreVersions.first
+        let isLoading = asc.isTabLoading(.review)
 
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                HStack {
+                    Text("Review")
+                        .font(.title2.weight(.semibold))
+                    Spacer()
+                    ASCTabRefreshButton(asc: asc, tab: .review, helpText: "Refresh review data")
+                }
+
                 // Current version status card
                 if let version = latest {
                     VStack(alignment: .leading, spacing: 12) {
@@ -142,6 +153,13 @@ struct ReviewView: View {
                                     .background(Color.green.opacity(0.15))
                                     .foregroundStyle(.green)
                                     .clipShape(Capsule())
+                            } else if isLoading {
+                                HStack(spacing: 6) {
+                                    ProgressView().controlSize(.small)
+                                    Text("Loading…")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             } else {
                                 Text("Not set")
                                     .font(.caption)
@@ -161,23 +179,42 @@ struct ReviewView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 10))
 
                 // Review Contact
-                DisclosureGroup(isExpanded: $contactExpanded) {
-                    reviewContactForm
-                } label: {
-                    HStack {
-                        Text("Review Contact")
-                            .font(.headline)
-                        Spacer()
-                        if let rd = asc.reviewDetail,
-                           rd.attributes.contactFirstName != nil {
-                            Text("\(rd.attributes.contactFirstName ?? "") \(rd.attributes.contactLastName ?? "")")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Text("Not configured")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 0) {
+                    Button {
+                        withAnimation { contactExpanded.toggle() }
+                    } label: {
+                        HStack {
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .rotationEffect(.degrees(contactExpanded ? 90 : 0))
+                                .animation(.easeInOut(duration: 0.15), value: contactExpanded)
+                            Text("Review Contact")
+                                .font(.headline)
+                            Spacer()
+                            if let rd = asc.reviewDetail,
+                               rd.attributes.contactFirstName != nil {
+                                Text("\(rd.attributes.contactFirstName ?? "") \(rd.attributes.contactLastName ?? "")")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else if isLoading {
+                                HStack(spacing: 6) {
+                                    ProgressView().controlSize(.small)
+                                    Text("Loading…")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            } else {
+                                Text("Not configured")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
                         }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    if contactExpanded {
+                        reviewContactForm
                     }
                 }
                 .padding(16)
@@ -190,9 +227,18 @@ struct ReviewView: View {
                         .font(.headline)
 
                     if asc.builds.isEmpty {
-                        Text("No builds available. Upload a build via Xcode or Transporter.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
+                        if isLoading {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text("Loading builds and review history…")
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Text("No builds available. Upload a build via Xcode or Transporter.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
                     } else {
                         Picker("Build", selection: $selectedBuild) {
                             Text("Select a build…").tag("")
@@ -264,10 +310,12 @@ struct ReviewView: View {
             populateAgeRating()
             populateContact()
             applyPendingValues()
+            syncSelectedBuild()
         }
         .onChange(of: asc.ageRatingDeclaration?.id) { _, _ in populateAgeRating() }
         .onChange(of: asc.reviewDetail?.id) { _, _ in populateContact() }
         .onChange(of: asc.pendingFormVersion) { _, _ in applyPendingValues() }
+        .onChange(of: asc.builds.map(\.id)) { _, _ in syncSelectedBuild() }
         .onChange(of: contactFocused) { _, _ in
             // Don't auto-save contact — requires all required fields.
             // User saves explicitly via the "Save Contact" button.
@@ -598,6 +646,7 @@ struct ReviewView: View {
         case "PENDING_DEVELOPER_RELEASE": return ("Pending Release", .yellow)
         case "IN_REVIEW": return ("In Review", .blue)
         case "WAITING_FOR_REVIEW": return ("Waiting", .blue)
+        case "INVALID_BINARY": return ("Submission Error", .red)
         case "REJECTED": return ("Rejected", .red)
         case "DEVELOPER_REJECTED": return ("Dev Rejected", .orange)
         case "PREPARE_FOR_SUBMISSION": return ("Draft", .secondary)
@@ -617,6 +666,16 @@ struct ReviewView: View {
             return true
         }
         return false
+    }
+
+    private func syncSelectedBuild() {
+        if !selectedBuild.isEmpty,
+           asc.builds.contains(where: { $0.id == selectedBuild }) {
+            return
+        }
+        selectedBuild = asc.builds.first(where: { $0.attributes.processingState == "VALID" })?.id
+            ?? asc.builds.first?.id
+            ?? ""
     }
 
 }

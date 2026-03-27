@@ -5,24 +5,20 @@ struct ASCOverview: View {
 
     private var asc: ASCManager { appState.ascManager }
     @State private var showPreview = false
-    @State private var appIcon: NSImage?
 
     var body: some View {
         ASCCredentialGate(
+            appState: appState,
             ascManager: asc,
             projectId: appState.activeProjectId ?? "",
             bundleId: appState.activeProject?.metadata.bundleIdentifier
         ) {
-            ASCTabContent(asc: asc, tab: .ascOverview, platform: appState.activeProject?.platform ?? .iOS) {
+            ASCTabContent(appState: appState, asc: asc, tab: .app, platform: appState.activeProject?.platform ?? .iOS) {
                 overviewContent
             }
         }
-        .task(id: appState.activeProjectId) {
-            if let pid = appState.activeProjectId {
-                asc.checkAppIcon(projectId: pid)
-                appIcon = Self.loadAppIcon(projectId: pid)
-            }
-            await asc.fetchTabData(.ascOverview)
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
+            await asc.ensureTabData(.app)
         }
         .sheet(isPresented: $showPreview) {
             SubmitPreviewSheet(appState: appState)
@@ -39,14 +35,22 @@ struct ASCOverview: View {
     private var overviewContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("Overview")
+                        .font(.title2.weight(.semibold))
+                    Spacer()
+                    ASCTabRefreshButton(asc: asc, tab: .app, helpText: "Refresh overview data")
+                }
+
                 if let app = asc.app {
                     HStack(spacing: 10) {
-                        if let icon = appIcon {
-                            Image(nsImage: icon)
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .frame(width: 40, height: 40)
-                                .clipShape(RoundedRectangle(cornerRadius: 9))
+                        if let project = appState.activeProject {
+                            ProjectAppIconView(project: project, size: 40, cornerRadius: 9) {
+                                Image(systemName: "app.fill")
+                                    .font(.system(size: 30))
+                                    .foregroundStyle(.blue)
+                                    .frame(width: 40, height: 40)
+                            }
                         } else {
                             Image(systemName: "app.fill")
                                 .font(.system(size: 30))
@@ -122,14 +126,6 @@ struct ASCOverview: View {
                         Text("Submission Readiness")
                             .font(.headline)
 
-                        Button {
-                            Task { await asc.refreshTabData(.ascOverview) }
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Refresh submission readiness")
-
                         Spacer()
                         let versionState = asc.appStoreVersions.first(where: {
                             let s = $0.attributes.appStoreState ?? ""
@@ -156,6 +152,12 @@ struct ASCOverview: View {
                                     Text(field.label)
                                         .font(.callout)
                                         .foregroundStyle(.orange)
+                                } else if field.isLoading {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text(field.label)
+                                        .font(.callout)
+                                        .foregroundStyle(.secondary)
                                 } else if field.required && (field.value == nil || field.value!.isEmpty) {
                                     Image(systemName: "exclamationmark.circle.fill")
                                         .foregroundStyle(.red)
@@ -194,6 +196,10 @@ struct ASCOverview: View {
                                                 .frame(maxWidth: 200, alignment: .trailing)
                                         }
                                     }
+                                } else if field.isLoading {
+                                    Text("Loading…")
+                                        .font(.callout)
+                                        .foregroundStyle(.secondary)
                                 } else if let url = field.actionUrl, let nsUrl = URL(string: url) {
                                     if field.label != "Privacy Nutrition Labels" {
                                         Button {
@@ -280,7 +286,22 @@ struct ASCOverview: View {
         let settings = SettingsService.shared
         let agent = AIAgent(rawValue: settings.defaultAgentCLI) ?? .claudeCode
         let terminal = settings.resolveDefaultTerminal().terminal
-        TerminalLauncher.launch(projectPath: projectPath, agent: agent, terminal: terminal, prompt: prompt, skipPermissions: settings.skipAgentPermissions)
+
+        if terminal.isBuiltIn {
+            appState.showTerminal = true
+            let session = appState.terminalManager.createSession(projectPath: projectPath)
+            let command = TerminalLauncher.buildAgentCommand(
+                projectPath: projectPath,
+                agent: agent,
+                prompt: prompt,
+                skipPermissions: settings.skipAgentPermissions
+            )
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                session.sendCommand(command)
+            }
+        } else {
+            TerminalLauncher.launch(projectPath: projectPath, agent: agent, terminal: terminal, prompt: prompt, skipPermissions: settings.skipAgentPermissions)
+        }
     }
 
     private var buildProgress: Double {
@@ -346,6 +367,7 @@ struct ASCOverview: View {
         case "PENDING_DEVELOPER_RELEASE": return ("Pending Release", .yellow)
         case "IN_REVIEW": return ("In Review", .blue)
         case "WAITING_FOR_REVIEW": return ("Waiting", .blue)
+        case "INVALID_BINARY": return ("Submission Error", .red)
         case "REJECTED": return ("Rejected", .red)
         case "DEVELOPER_REJECTED": return ("Dev Rejected", .orange)
         case "DEVELOPER_REMOVED_FROM_SALE": return ("Removed", .secondary)
@@ -357,6 +379,8 @@ struct ASCOverview: View {
         switch eventType {
         case .submitted:
             return ("Submitted", .blue)
+        case .submissionError:
+            return ("Submission Error", .red)
         case .inReview:
             return ("In Review", .blue)
         case .processing:
@@ -372,30 +396,5 @@ struct ASCOverview: View {
         case .removed:
             return ("Removed", .secondary)
         }
-    }
-
-
-    private static func loadAppIcon(projectId: String) -> NSImage? {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let blitzPath = "\(home)/.blitz/projects/\(projectId)/assets/AppIcon/icon_1024.png"
-        if let image = NSImage(contentsOfFile: blitzPath) { return image }
-
-        let projectDir = "\(home)/.blitz/projects/\(projectId)"
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(atPath: projectDir) else { return nil }
-        while let file = enumerator.nextObject() as? String {
-            guard file.hasSuffix("AppIcon.appiconset/Contents.json") else { continue }
-            let contentsPath = "\(projectDir)/\(file)"
-            guard let data = fm.contents(atPath: contentsPath),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let images = json["images"] as? [[String: Any]] else { continue }
-            for entry in images {
-                if let filename = entry["filename"] as? String {
-                    let iconDir = (contentsPath as NSString).deletingLastPathComponent
-                    if let image = NSImage(contentsOfFile: "\(iconDir)/\(filename)") { return image }
-                }
-            }
-        }
-        return nil
     }
 }

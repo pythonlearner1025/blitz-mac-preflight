@@ -28,10 +28,14 @@ final class SettingsService {
 
     // Onboarding
     var hasCompletedOnboarding: Bool = false
-    var defaultTerminal: String = "terminal"   // "terminal", "ghostty", "iterm", or custom path
+    var defaultTerminal: String = "builtIn"   // "builtIn", "terminal", "ghostty", "iterm", or custom path
     var defaultAgentCLI: String = AIAgent.claudeCode.rawValue
     var sendDefaultPrompt: Bool = true
     var skipAgentPermissions: Bool = false
+    var whitelistBlitzMCPTools: Bool = true
+    var allowASCCLICalls: Bool = false
+    var enableASCShellIntegration: Bool = false
+    var terminalPosition: String = "bottom"  // "bottom" or "right"
 
     init() {
         self.settingsURL = BlitzPaths.settings
@@ -52,6 +56,10 @@ final class SettingsService {
         if let agent = json["defaultAgentCLI"] as? String { defaultAgentCLI = agent }
         if let sendPrompt = json["sendDefaultPrompt"] as? Bool { sendDefaultPrompt = sendPrompt }
         if let skipPerms = json["skipAgentPermissions"] as? Bool { skipAgentPermissions = skipPerms }
+        if let whitelist = json["whitelistBlitzMCPTools"] as? Bool { whitelistBlitzMCPTools = whitelist }
+        if let allowASCCLI = json["allowASCCLICalls"] as? Bool { allowASCCLICalls = allowASCCLI }
+        if let shellIntegration = json["enableASCShellIntegration"] as? Bool { enableASCShellIntegration = shellIntegration }
+        if let termPos = json["terminalPosition"] as? String { terminalPosition = termPos }
     }
 
     func save() {
@@ -64,6 +72,10 @@ final class SettingsService {
             "defaultAgentCLI": defaultAgentCLI,
             "sendDefaultPrompt": sendDefaultPrompt,
             "skipAgentPermissions": skipAgentPermissions,
+            "whitelistBlitzMCPTools": whitelistBlitzMCPTools,
+            "allowASCCLICalls": allowASCCLICalls,
+            "enableASCShellIntegration": enableASCShellIntegration,
+            "terminalPosition": terminalPosition,
         ]
         if let udid = defaultSimulatorUDID {
             json["defaultSimulatorUDID"] = udid
@@ -97,5 +109,19 @@ final class SettingsService {
         defaultTerminal = resolved.settingsValue
         save()
         return ResolvedTerminalSelection(terminal: resolved, replacedMissingTerminal: configured)
+    }
+
+    func setASCShellIntegrationEnabled(_ enabled: Bool) throws {
+        let previousValue = enableASCShellIntegration
+        enableASCShellIntegration = enabled
+        save()
+
+        do {
+            try ShellIntegrationService().sync(enabled: enabled)
+        } catch {
+            enableASCShellIntegration = previousValue
+            save()
+            throw error
+        }
     }
 }

@@ -6,7 +6,7 @@ struct NewProjectSheet: View {
 
     @State private var projectName = ""
     @State private var platform: ProjectPlatform = .iOS
-    @State private var projectType: ProjectType = .reactNative
+    @State private var projectType: ProjectType = .swift
     @State private var errorMessage: String?
 
     var body: some View {

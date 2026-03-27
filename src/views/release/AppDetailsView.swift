@@ -45,21 +45,33 @@ struct AppDetailsView: View {
 
     var body: some View {
         ASCCredentialGate(
+            appState: appState,
             ascManager: asc,
             projectId: appState.activeProjectId ?? "",
             bundleId: appState.activeProject?.metadata.bundleIdentifier
         ) {
-            ASCTabContent(asc: asc, tab: .appDetails, platform: appState.activeProject?.platform ?? .iOS) {
+            ASCTabContent(appState: appState, asc: asc, tab: .appDetails, platform: appState.activeProject?.platform ?? .iOS) {
                 detailsContent
             }
         }
-        .task { await asc.fetchTabData(.appDetails) }
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
+            await asc.ensureTabData(.appDetails)
+        }
     }
 
     @ViewBuilder
     private var detailsContent: some View {
+        let isLoading = asc.isTabLoading(.appDetails)
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("App Details")
+                        .font(.title2.weight(.semibold))
+                    Spacer()
+                    ASCTabRefreshButton(asc: asc, tab: .appDetails, helpText: "Refresh app details")
+                }
+                .padding(.bottom, 20)
+
                 sectionHeader("App Identity")
 
                 if let app = asc.app {
@@ -82,10 +94,20 @@ struct AppDetailsView: View {
                     .padding(.top, 20)
 
                 if asc.appStoreVersions.isEmpty {
-                    Text("No versions found")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    if isLoading {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("Loading version information…")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
                         .padding(.vertical, 8)
+                    } else {
+                        Text("No versions found")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 8)
+                    }
                 } else {
                     ForEach(Array(asc.appStoreVersions.prefix(5).enumerated()), id: \.element.id) { idx, version in
                         HStack {

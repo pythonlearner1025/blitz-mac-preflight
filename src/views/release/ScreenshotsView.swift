@@ -13,7 +13,7 @@ private enum ScreenshotDeviceType: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .iPhone: "iPhone 6.5\""
+        case .iPhone: "iPhone 6.7\""
         case .iPad: "iPad Pro 12.9\""
         case .mac: "Mac"
         }
@@ -82,12 +82,31 @@ struct ScreenshotsView: View {
         ScreenshotDeviceType.types(for: platform)
     }
 
+    private var currentLocale: String {
+        if let selectedScreenshotsLocale = asc.selectedScreenshotsLocale,
+           asc.localizations.contains(where: { $0.attributes.locale == selectedScreenshotsLocale }) {
+            return selectedScreenshotsLocale
+        }
+        // fallback
+        return asc.localizations.first?.attributes.locale ?? "en-US"
+    }
+
+    private var selectedLocaleBinding: Binding<String> {
+        Binding(
+            get: { currentLocale },
+            set: { newValue in
+                asc.selectedScreenshotsLocale = newValue
+                Task { await loadSelectedLocaleData() }
+            }
+        )
+    }
+
     private var currentTrack: [TrackSlot?] {
-        asc.trackSlots[selectedDevice.ascDisplayType] ?? Array(repeating: nil, count: 10)
+        asc.trackSlotsForDisplayType(selectedDevice.ascDisplayType, locale: currentLocale)
     }
 
     private var hasChanges: Bool {
-        asc.hasUnsavedChanges(displayType: selectedDevice.ascDisplayType)
+        asc.hasUnsavedChanges(displayType: selectedDevice.ascDisplayType, locale: currentLocale)
     }
 
     private var filledSlotCount: Int {
@@ -96,25 +115,50 @@ struct ScreenshotsView: View {
 
     var body: some View {
         ASCCredentialGate(
+            appState: appState,
             ascManager: asc,
             projectId: appState.activeProjectId ?? "",
             bundleId: appState.activeProject?.metadata.bundleIdentifier
         ) {
-            ASCTabContent(asc: asc, tab: .screenshots, platform: appState.activeProject?.platform ?? .iOS) {
-                HStack(spacing: 0) {
-                    assetLibraryPanel
-                        .frame(width: 220)
+            ASCTabContent(appState: appState, asc: asc, tab: .screenshots, platform: appState.activeProject?.platform ?? .iOS) {
+                VStack(spacing: 0) {
+                    HStack {
+                        Text("Screenshots")
+                            .font(.title2.weight(.semibold))
+                        if !asc.localizations.isEmpty {
+                            Picker("Locale", selection: selectedLocaleBinding) {
+                                ForEach(asc.localizations) { localization in
+                                    Text(localization.attributes.locale).tag(localization.attributes.locale)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .frame(width: 160)
+                        }
+                        Spacer()
+                        ASCTabRefreshButton(asc: asc, tab: .screenshots, helpText: "Refresh screenshots")
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+
                     Divider()
-                    VStack(spacing: 0) {
-                        detailView
+
+                    HStack(spacing: 0) {
+                        assetLibraryPanel
+                            .frame(width: 220)
                         Divider()
-                        trackView
-                            .frame(minHeight: 200)
+                        VStack(spacing: 0) {
+                            detailView
+                            Divider()
+                            trackView
+                                .frame(minHeight: 200)
+                        }
                     }
                 }
             }
         }
-        .task { await loadData() }
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
+            await loadData()
+        }
         .onChange(of: selectedDevice) { _, _ in loadTrackForDevice() }
         .alert("Import Error", isPresented: Binding(
             get: { importError != nil },
@@ -141,7 +185,7 @@ struct ScreenshotsView: View {
                                 Text(device.label)
                                     .font(.callout)
                                 Spacer()
-                                if asc.hasUnsavedChanges(displayType: device.ascDisplayType) {
+                                if asc.hasUnsavedChanges(displayType: device.ascDisplayType, locale: currentLocale) {
                                     Circle()
                                         .fill(.orange)
                                         .frame(width: 6, height: 6)
@@ -390,7 +434,7 @@ struct ScreenshotsView: View {
 
     private func trackSlotView(index: Int) -> some View {
         let slot = currentTrack[index]
-        let saved = (asc.savedTrackState[selectedDevice.ascDisplayType] ?? Array(repeating: nil, count: 10))[index]
+        let saved = asc.savedTrackStateForDisplayType(selectedDevice.ascDisplayType, locale: currentLocale)[index]
         let isSynced = slot?.id == saved?.id && slot != nil
         let hasError = slot?.ascScreenshot?.hasError == true
 
@@ -438,7 +482,13 @@ struct ScreenshotsView: View {
 
                     // Delete button (top-right)
                     Button {
-                        withAnimation { asc.removeFromTrack(displayType: selectedDevice.ascDisplayType, slotIndex: index) }
+                        withAnimation {
+                            asc.removeFromTrack(
+                                displayType: selectedDevice.ascDisplayType,
+                                slotIndex: index,
+                                locale: currentLocale
+                            )
+                        }
                         if selectedTrackIndex == index { selectedTrackIndex = nil }
                     } label: {
                         Image(systemName: "xmark.circle.fill")
@@ -486,6 +536,7 @@ struct ScreenshotsView: View {
             .onDrop(of: [.text], delegate: TrackSlotDropDelegate(
                 targetIndex: index,
                 displayType: selectedDevice.ascDisplayType,
+                locale: currentLocale,
                 asc: asc,
                 localAssets: asc.localScreenshotAssets,
                 draggedAssetId: $draggedAssetId,
@@ -532,22 +583,28 @@ struct ScreenshotsView: View {
             selectedDevice = first
         }
 
-        await asc.fetchTabData(.screenshots)
-
-        // Scan local assets
         if let projectId = appState.activeProjectId {
             asc.scanLocalAssets(projectId: projectId)
         }
 
-        // Load track from ASC
-        loadTrackForDevice()
+        await asc.ensureTabData(.screenshots)
+        if asc.selectedScreenshotsLocale == nil {
+            asc.selectedScreenshotsLocale = asc.localizations.first?.attributes.locale
+        }
+        await loadSelectedLocaleData()
     }
 
-    private func loadTrackForDevice() {
+    private func loadSelectedLocaleData(force: Bool = false) async {
+        guard !currentLocale.isEmpty else { return }
+        await asc.loadScreenshots(locale: currentLocale, force: force)
+        loadTrackForDevice(force: force)
+    }
+
+    private func loadTrackForDevice(force: Bool = false) {
         let displayType = selectedDevice.ascDisplayType
-        // Only load from ASC if not already populated (preserves unsaved changes)
-        if asc.trackSlots[displayType] == nil {
-            asc.loadTrackFromASC(displayType: displayType)
+        let locale = currentLocale
+        if force || !asc.hasTrackState(displayType: displayType, locale: locale) {
+            asc.loadTrackFromASC(displayType: displayType, locale: locale)
         }
     }
 
@@ -649,7 +706,6 @@ struct ScreenshotsView: View {
         for provider in providers {
             if provider.canLoadObject(ofClass: NSURL.self) {
                 hasValidProvider = true
-                let ascRef = asc
                 provider.loadObject(ofClass: NSURL.self) { reading, _ in
                     guard let url = reading as? URL,
                           url.isFileURL,
@@ -667,7 +723,7 @@ struct ScreenshotsView: View {
     private func save() async {
         await asc.syncTrackToASC(
             displayType: selectedDevice.ascDisplayType,
-            locale: "en-US"
+            locale: currentLocale
         )
     }
 }
@@ -677,6 +733,7 @@ struct ScreenshotsView: View {
 private struct TrackSlotDropDelegate: DropDelegate {
     let targetIndex: Int
     let displayType: String
+    let locale: String
     let asc: ASCManager
     let localAssets: [LocalScreenshotAsset]
     @Binding var draggedAssetId: UUID?
@@ -692,7 +749,12 @@ private struct TrackSlotDropDelegate: DropDelegate {
         // Drop from asset library
         if let assetId = draggedAssetId,
            let asset = localAssets.first(where: { $0.id == assetId }) {
-            let error = asc.addAssetToTrack(displayType: displayType, slotIndex: targetIndex, localPath: asset.url.path)
+            let error = asc.addAssetToTrack(
+                displayType: displayType,
+                slotIndex: targetIndex,
+                localPath: asset.url.path,
+                locale: locale
+            )
             if let error {
                 importError = "Cannot add \(asset.fileName): \(error)"
                 return false
@@ -703,7 +765,12 @@ private struct TrackSlotDropDelegate: DropDelegate {
         // Reorder within track
         if let fromIndex = draggedTrackIndex, fromIndex != targetIndex {
             withAnimation {
-                asc.reorderTrack(displayType: displayType, fromIndex: fromIndex, toIndex: targetIndex)
+                asc.reorderTrack(
+                    displayType: displayType,
+                    fromIndex: fromIndex,
+                    toIndex: targetIndex,
+                    locale: locale
+                )
             }
             return true
         }

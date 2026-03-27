@@ -23,7 +23,14 @@ struct ContentView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var mainWindow: NSWindow?
     @State private var tabSwitchTask: Task<Void, Never>?
-    @State private var showConnectAI = false
+
+    private var terminalSplitMinContentSize: CGFloat {
+        let baseMinContentSize: CGFloat = 200
+        guard appState.settingsStore.terminalPosition == "right" else {
+            return baseMinContentSize
+        }
+        return max(baseMinContentSize, AppTabView.minimumSingleLineWidth)
+    }
 
     private var appleIDLoginBinding: Binding<Bool> {
         Binding(
@@ -33,6 +40,40 @@ struct ContentView: View {
     }
 
     /// Consume pendingSetupProjectId and run project scaffolding if needed.
+    private func launchTerminal() {
+        let settings = appState.settingsStore
+        let terminal = settings.resolveDefaultTerminal().terminal
+
+        if terminal.isBuiltIn {
+            // Show built-in terminal panel
+            appState.showTerminal = true
+
+            // Create a new session with the AI agent command
+            let session = appState.terminalManager.createSession(projectPath: appState.activeProject?.path)
+
+            // Build and send the agent CLI command
+            let agent = AIAgent(rawValue: settings.defaultAgentCLI) ?? .claudeCode
+            let prompt = settings.sendDefaultPrompt ? ConnectAIPopover.prompt(for: appState.activeTab) : nil
+            let command = TerminalLauncher.buildAgentCommand(
+                projectPath: appState.activeProject?.path,
+                agent: agent,
+                prompt: prompt,
+                skipPermissions: settings.skipAgentPermissions
+            )
+
+            // Small delay so the shell is ready to receive input
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                session.sendCommand(command)
+            }
+        } else {
+            // Launch external terminal
+            TerminalLauncher.launchFromSettings(
+                projectPath: appState.activeProject?.path,
+                activeTab: appState.activeTab
+            )
+        }
+    }
+
     private func startPendingSetupIfNeeded() async {
         guard let pendingId = appState.projectSetup.pendingSetupProjectId,
               pendingId == appState.activeProjectId,
@@ -47,38 +88,52 @@ struct ContentView: View {
         )
     }
 
+    private func refreshProjectFiles(projectId: String, projectType: ProjectType) {
+        let whitelistBlitzMCP = appState.settingsStore.whitelistBlitzMCPTools
+        let allowASCCLICalls = appState.settingsStore.allowASCCLICalls
+        Task.detached(priority: .utility) {
+            let storage = ProjectStorage()
+            storage.ensureMCPConfig(
+                projectId: projectId,
+                whitelistBlitzMCP: whitelistBlitzMCP,
+                allowASCCLICalls: allowASCCLICalls
+            )
+            storage.ensureTeenybaseBackend(projectId: projectId, projectType: projectType)
+            storage.ensureClaudeFiles(
+                projectId: projectId,
+                projectType: projectType,
+                whitelistBlitzMCP: whitelistBlitzMCP,
+                allowASCCLICalls: allowASCCLICalls
+            )
+        }
+    }
+
     var body: some View {
         NavigationSplitView {
             SidebarView(appState: appState)
                 .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 250)
         } detail: {
-            DetailView(appState: appState)
+            TerminalSplitView(
+                isHorizontal: appState.settingsStore.terminalPosition == "right",
+                showPanel: appState.showTerminal,
+                panelSize: $appState.terminalPanelSize,
+                minPanelSize: 120,
+                minContentSize: terminalSplitMinContentSize
+            ) {
+                DetailView(appState: appState)
+            } panel: {
+                TerminalPanelView(appState: appState)
+            }
         }
         .navigationSplitViewStyle(.balanced)
         .toolbar {
             ToolbarItem(placement: .navigation) {
-                Button(action: {
-                    // Try to auto-launch terminal with agent CLI
-                    let launched = TerminalLauncher.launchFromSettings(
-                        projectPath: appState.activeProject?.path,
-                        activeTab: appState.activeTab
-                    )
-                    if !launched {
-                        // Fallback: show the popover
-                        showConnectAI = true
-                    }
-                }) {
-                    Label("Connect AI", systemImage: "sparkles")
+                Button {
+                    launchTerminal()
+                } label: {
+                    Label("Terminal", systemImage: "terminal")
                 }
-                .help("Connect AI agent")
-                .popover(isPresented: $showConnectAI, arrowEdge: .bottom) {
-                    ConnectAIPopover(projectPath: appState.activeProject?.path, activeTab: appState.activeTab)
-                }
-                .contextMenu {
-                    Button("Show Connect AI Panel") {
-                        showConnectAI = true
-                    }
-                }
+                .help("Launch terminal with AI agent")
             }
         }
         .background(HostingWindowFinder { window in
@@ -86,14 +141,18 @@ struct ContentView: View {
         })
         .task {
             await appState.projectManager.loadProjects()
+            if let projectId = appState.activeProjectId,
+               let projectType = appState.activeProject?.type {
+                refreshProjectFiles(projectId: projectId, projectType: projectType)
+            }
 
             // If a project was just created (e.g. from WelcomeWindow), run setup
             await startPendingSetupIfNeeded()
 
             // Auto-boot simulator when project opens
             await appState.simulatorManager.bootIfNeeded()
-            // Auto-start stream if landing on simulator tab
-            if appState.activeTab == .simulator {
+            // Auto-start stream if landing on simulator sub-tab
+            if appState.activeTab == .app && appState.activeAppSubTab == .simulator {
                 await appState.simulatorStream.startStreaming(
                     bootedDeviceId: appState.simulatorManager.bootedDeviceId
                 )
@@ -106,7 +165,9 @@ struct ContentView: View {
                     bundleId: project.metadata.bundleIdentifier
                 )
                 if appState.activeTab.isASCTab {
-                    await appState.ascManager.fetchTabData(appState.activeTab)
+                    await appState.ascManager.ensureTabData(appState.activeTab)
+                } else if appState.activeTab == .app && appState.activeAppSubTab == .overview {
+                    await appState.ascManager.ensureTabData(.app)
                 }
             }
         }
@@ -118,25 +179,25 @@ struct ContentView: View {
                 mainWindow?.close()
             } else {
                 // Project switched → ensure config files, run pending setup, reload ASC credentials
+                if let newId = newValue {
+                    appState.ascManager.prepareForProjectSwitch(to: newId)
+                }
+
+                if let newId = newValue, let projectType = appState.activeProject?.type {
+                    refreshProjectFiles(projectId: newId, projectType: projectType)
+                }
+
                 Task {
-                    if let newId = newValue, let project = appState.activeProject {
-                        // Ensure config files are up to date on every open.
-                        // Handles Tauri migration, first-open of imported projects,
-                        // and ensures Teenybase backend files are scaffolded.
-                        let storage = ProjectStorage()
-                        storage.ensureMCPConfig(projectId: newId)
-                        storage.ensureTeenybaseBackend(projectId: newId, projectType: project.type)
-                        storage.ensureClaudeFiles(projectId: newId, projectType: project.type)
-                    }
                     await startPendingSetupIfNeeded()
-                    appState.ascManager.clearForProjectSwitch()
                     if let newId = newValue, let project = appState.activeProject {
                         await appState.ascManager.loadCredentials(
                             for: newId,
                             bundleId: project.metadata.bundleIdentifier
                         )
                         if appState.activeTab.isASCTab {
-                            await appState.ascManager.fetchTabData(appState.activeTab)
+                            await appState.ascManager.ensureTabData(appState.activeTab)
+                        } else if appState.activeTab == .app && appState.activeAppSubTab == .overview {
+                            await appState.ascManager.ensureTabData(.app)
                         }
                     }
                 }
@@ -145,12 +206,15 @@ struct ContentView: View {
         .onChange(of: appState.activeTab) { oldTab, newTab in
             tabSwitchTask?.cancel()
             tabSwitchTask = Task {
-                // Pause stream when leaving simulator tab
-                if oldTab == .simulator && newTab != .simulator {
+                let isLeavingSimulator = oldTab == .app && appState.activeAppSubTab == .simulator
+                let isEnteringSimulator = newTab == .app && appState.activeAppSubTab == .simulator
+
+                // Pause stream when leaving simulator
+                if isLeavingSimulator && newTab != .app {
                     await appState.simulatorStream.pauseStream()
                 }
-                // Resume/start stream when entering simulator tab
-                if newTab == .simulator {
+                // Resume/start stream when entering simulator
+                if isEnteringSimulator {
                     if appState.simulatorStream.isPaused {
                         await appState.simulatorStream.resumeStream()
                     } else if !appState.simulatorStream.isCapturing {
@@ -161,7 +225,31 @@ struct ContentView: View {
                 }
                 // Fetch ASC data when entering any ASC tab
                 if newTab.isASCTab {
-                    await appState.ascManager.fetchTabData(newTab)
+                    await appState.ascManager.ensureTabData(newTab)
+                }
+            }
+        }
+        .onChange(of: appState.activeAppSubTab) { oldSub, newSub in
+            guard appState.activeTab == .app else { return }
+            tabSwitchTask?.cancel()
+            tabSwitchTask = Task {
+                // Pause stream when leaving simulator sub-tab
+                if oldSub == .simulator && newSub != .simulator {
+                    await appState.simulatorStream.pauseStream()
+                }
+                // Resume/start stream when entering simulator sub-tab
+                if newSub == .simulator {
+                    if appState.simulatorStream.isPaused {
+                        await appState.simulatorStream.resumeStream()
+                    } else if !appState.simulatorStream.isCapturing {
+                        await appState.simulatorStream.startStreaming(
+                            bootedDeviceId: appState.simulatorManager.bootedDeviceId
+                        )
+                    }
+                }
+                // Fetch ASC overview data when entering overview sub-tab
+                if newSub == .overview {
+                    await appState.ascManager.ensureTabData(.app)
                 }
             }
         }
@@ -224,16 +312,10 @@ struct DetailView: View {
     @ViewBuilder
     private var activeTabView: some View {
         switch appState.activeTab {
-        case .simulator:
-            SimulatorView(appState: appState)
-        case .database:
-            DatabaseView(appState: appState)
-        case .tests:
-            TestsView(appState: appState)
-        case .assets:
-            AssetsView(appState: appState)
-        case .ascOverview:
-            ASCOverview(appState: appState)
+        case .dashboard:
+            DashboardView(appState: appState)
+        case .app:
+            AppTabView(appState: appState)
         case .storeListing:
             StoreListingView(appState: appState)
         case .screenshots:

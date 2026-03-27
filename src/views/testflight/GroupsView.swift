@@ -7,40 +7,63 @@ struct GroupsView: View {
 
     var body: some View {
         ASCCredentialGate(
+            appState: appState,
             ascManager: asc,
             projectId: appState.activeProjectId ?? "",
             bundleId: appState.activeProject?.metadata.bundleIdentifier
         ) {
-            ASCTabContent(asc: asc, tab: .groups, platform: appState.activeProject?.platform ?? .iOS) {
+            ASCTabContent(appState: appState, asc: asc, tab: .groups, platform: appState.activeProject?.platform ?? .iOS) {
                 groupsContent
             }
         }
-        .task { await asc.fetchTabData(.groups) }
+        .task(id: "\(appState.activeProjectId ?? ""):\(asc.credentialActivationRevision)") {
+            await asc.ensureTabData(.groups)
+        }
     }
 
     @ViewBuilder
     private var groupsContent: some View {
-        if asc.betaGroups.isEmpty {
-            ContentUnavailableView(
-                "No Beta Groups",
-                systemImage: "person.3",
-                description: Text("No beta testing groups found for this app.")
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            ScrollView {
-                VStack(spacing: 12) {
-                    let internal_ = asc.betaGroups.filter { $0.attributes.isInternalGroup == true }
-                    let external = asc.betaGroups.filter { $0.attributes.isInternalGroup != true }
+        VStack(spacing: 0) {
+            HStack {
+                Text("Groups")
+                    .font(.title2.weight(.semibold))
+                Spacer()
+                ASCTabRefreshButton(asc: asc, tab: .groups, helpText: "Refresh groups")
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
 
-                    if !internal_.isEmpty {
-                        groupSection("Internal Groups", groups: internal_, color: .blue)
-                    }
-                    if !external.isEmpty {
-                        groupSection("External Groups", groups: external, color: .green)
-                    }
+            Divider()
+
+            if asc.betaGroups.isEmpty {
+                if asc.isTabLoading(.groups) {
+                    ASCTabLoadingPlaceholder(
+                        title: "Loading Beta Groups",
+                        message: "Fetching internal and external TestFlight groups."
+                    )
+                } else {
+                    ContentUnavailableView(
+                        "No Beta Groups",
+                        systemImage: "person.3",
+                        description: Text("No beta testing groups found for this app.")
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .padding(20)
+            } else {
+                ScrollView {
+                    VStack(spacing: 12) {
+                        let internal_ = asc.betaGroups.filter { $0.attributes.isInternalGroup == true }
+                        let external = asc.betaGroups.filter { $0.attributes.isInternalGroup != true }
+
+                        if !internal_.isEmpty {
+                            groupSection("Internal Groups", groups: internal_, color: .blue)
+                        }
+                        if !external.isEmpty {
+                            groupSection("External Groups", groups: external, color: .green)
+                        }
+                    }
+                    .padding(20)
+                }
             }
         }
     }
