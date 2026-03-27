@@ -28,6 +28,8 @@ If you are fighting App Store Connect to get your app submitted, Blitz automates
 
 https://github.com/user-attachments/assets/07364d9f-f6a7-4375-acc8-b7ab46dcc60e
 
+### Features
+
 | Features                   |                                                                                                                  |
 |----------------------------|------------------------------------------------------------------------------------------------------------------|
 | **App Store Connect**      | Submit for review, manage versions, pricing, listings                                                            |
@@ -37,8 +39,6 @@ https://github.com/user-attachments/assets/07364d9f-f6a7-4375-acc8-b7ab46dcc60e
 | **iOS Simulator**          | Boot/shutdown, touch/swipe, live screen capture                                                                  |
 | **MCP server (~35 tools)** | Claude Code, Codex, Cursor, or any MCP client drives the full workflow                                           |
 | **[asc-cli](https://github.com/rudrankriyam/App-Store-Connect-CLI) (bundled)** | Scriptable CLI for edge-case ASC operations. Auto-installed, shared auth, available in every Blitz agent session |
-
-**Works with:** Claude Code · Codex · Cursor · any MCP-compatible client
 
 ## Download
 
