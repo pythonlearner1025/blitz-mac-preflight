@@ -54,6 +54,32 @@ import Testing
     #expect(ASCReleaseStatus.reviewSubmissionEventType(forVersionState: "WAITING_FOR_REVIEW") == .submitted)
 }
 
+@Test func appWallCurrentStatePrefersLiveOverNewerPrepareForSubmissionDraft() {
+    let state = ASCReleaseStatus.appWallCurrentState(for: [
+        makeVersion(id: "draft", state: "PREPARE_FOR_SUBMISSION", createdDate: "2026-03-21T00:00:00Z"),
+        makeVersion(id: "live", state: "READY_FOR_SALE", createdDate: "2026-03-20T00:00:00Z"),
+    ])
+
+    #expect(state == "READY_FOR_SALE")
+}
+
+@Test func appWallCurrentStatePrefersCurrentPendingReviewUpdateOverLiveVersion() {
+    let state = ASCReleaseStatus.appWallCurrentState(for: [
+        makeVersion(id: "review", state: "IN_REVIEW", createdDate: "2026-03-21T00:00:00Z"),
+        makeVersion(id: "live", state: "READY_FOR_SALE", createdDate: "2026-03-20T00:00:00Z"),
+    ])
+
+    #expect(state == "IN_REVIEW")
+}
+
+@Test func appWallCurrentStateFallsBackToNewestStateWhenNoLiveVersionExists() {
+    let state = ASCReleaseStatus.appWallCurrentState(for: [
+        makeVersion(id: "draft", state: "PREPARE_FOR_SUBMISSION", createdDate: "2026-03-21T00:00:00Z"),
+    ])
+
+    #expect(state == "PREPARE_FOR_SUBMISSION")
+}
+
 private func makeVersion(id: String, state: String, createdDate: String) -> ASCAppStoreVersion {
     ASCAppStoreVersion(
         id: id,

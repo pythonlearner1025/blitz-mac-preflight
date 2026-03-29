@@ -75,6 +75,11 @@ enum ASCReleaseStatus {
         "READY_FOR_SALE",
     ]
 
+    static let removedStates: Set<String> = [
+        "REMOVED_FROM_SALE",
+        "DEVELOPER_REMOVED_FROM_SALE",
+    ]
+
     static let pendingReviewStates: Set<String> = [
         "ACCEPTED",
         "IN_REVIEW",
@@ -92,6 +97,73 @@ enum ASCReleaseStatus {
         "REJECTED",
     ]
 
+    static let editableStates: Set<String> = Set([
+        "DEVELOPER_REJECTED",
+        "PREPARE_FOR_SUBMISSION",
+    ]).union(rejectedStates)
+
+    static let lockedStates: Set<String> = liveStates
+        .union(removedStates)
+        .union(pendingReviewStates)
+
+    static func submissionHistoryEventType(forVersionState state: String?) -> ASCSubmissionHistoryEventType? {
+        switch normalize(state) {
+        case "WAITING_FOR_REVIEW":
+            return .submitted
+        case "IN_REVIEW":
+            return .inReview
+        case "PROCESSING", "PROCESSING_FOR_APP_STORE", "PROCESSING_FOR_DISTRIBUTION":
+            return .processing
+        case "ACCEPTED", "PENDING_DEVELOPER_RELEASE":
+            return .accepted
+        case "READY_FOR_SALE":
+            return .live
+        case "INVALID_BINARY":
+            return .submissionError
+        case "METADATA_REJECTED", "REJECTED":
+            return .rejected
+        case "DEVELOPER_REJECTED":
+            return .withdrawn
+        case "REMOVED_FROM_SALE", "DEVELOPER_REMOVED_FROM_SALE":
+            return .removed
+        default:
+            return nil
+        }
+    }
+
+    static func reviewSubmissionEventType(forVersionState state: String?) -> ASCSubmissionHistoryEventType {
+        if normalize(state) == "INVALID_BINARY" {
+            return .submissionError
+        }
+        return .submitted
+    }
+
+    static func isLive(_ state: String?) -> Bool {
+        liveStates.contains(normalize(state))
+    }
+
+    static func isRemoved(_ state: String?) -> Bool {
+        removedStates.contains(normalize(state))
+    }
+
+    static func isLocked(_ state: String?) -> Bool {
+        lockedStates.contains(normalize(state))
+    }
+
+    static func isEditable(_ state: String?) -> Bool {
+        let normalized = normalize(state)
+        guard !normalized.isEmpty else { return false }
+        if editableStates.contains(normalized) {
+            return true
+        }
+        return !isLocked(normalized)
+    }
+
+    static func isCurrentUpdateCandidate(_ state: String?) -> Bool {
+        let normalized = normalize(state)
+        return !normalized.isEmpty && !isLive(normalized) && !isRemoved(normalized)
+    }
+
     static func normalize(_ state: String?) -> String {
         state?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -106,6 +178,37 @@ enum ASCReleaseStatus {
             }
             return lhs.id > rhs.id
         }
+    }
+
+    /// App Wall shows one compact state per app, so it should summarize the
+    /// version set the same way the dashboard does instead of copying the newest
+    /// version row verbatim. That keeps live apps live when a newer draft exists.
+    static func appWallCurrentState(for versions: [ASCAppStoreVersion]) -> String? {
+        let sortedVersions = sortedVersionsByRecency(versions)
+        guard !sortedVersions.isEmpty else { return nil }
+
+        let liveIndex = sortedVersions.firstIndex {
+            liveStates.contains(normalize($0.attributes.appStoreState))
+        }
+        let actionableIndex = sortedVersions.firstIndex { version in
+            let state = normalize(version.attributes.appStoreState)
+            return pendingReviewStates.contains(state) || rejectedStates.contains(state)
+        }
+
+        if let actionableIndex {
+            let actionableState = normalize(sortedVersions[actionableIndex].attributes.appStoreState)
+            let actionableStateIsCurrent = liveIndex == nil || actionableIndex < liveIndex!
+            if actionableStateIsCurrent {
+                return actionableState
+            }
+        }
+
+        if let liveIndex {
+            return normalize(sortedVersions[liveIndex].attributes.appStoreState)
+        }
+
+        let newestState = normalize(sortedVersions[0].attributes.appStoreState)
+        return newestState.isEmpty ? nil : newestState
     }
 
     private static func compareDates(_ lhs: String?, _ rhs: String?) -> Int {

@@ -154,7 +154,10 @@ actor AppWallService {
                 if let cat = meta.category { appPayload["primary_category"] = cat }
             }
             appPayload["latest_version"] = latestVersion.attributes.versionString
-            if let state = latestVersion.attributes.appStoreState {
+            // The app-wall card shows one summary state. Use the derived
+            // dashboard-style status so a newer draft update does not mask a
+            // currently live release as "Prepare for Submission".
+            if let state = ASCReleaseStatus.appWallCurrentState(for: versions) {
                 appPayload["current_state"] = state
             }
 

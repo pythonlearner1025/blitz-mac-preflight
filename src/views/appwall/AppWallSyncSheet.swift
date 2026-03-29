@@ -2,6 +2,8 @@ import SwiftUI
 
 struct AppWallSyncSheet: View {
     @Bindable var appState: AppState
+    let forceStart: Bool
+    let onSyncCompleted: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @AppStorage("appWallSyncConsented") private var syncConsented: Bool = false
 
@@ -14,6 +16,16 @@ struct AppWallSyncSheet: View {
         case syncing
         case done(count: Int, warning: String?)
         case error(String)
+    }
+
+    init(
+        appState: AppState,
+        forceStart: Bool = false,
+        onSyncCompleted: (() -> Void)? = nil
+    ) {
+        self.appState = appState
+        self.forceStart = forceStart
+        self.onSyncCompleted = onSyncCompleted
     }
 
     var body: some View {
@@ -215,7 +227,18 @@ struct AppWallSyncSheet: View {
         }
         do {
             let valid = try await AppWallService.shared.validateCredentials(credentials)
-            sheetState = valid ? .ready : .noCredentials
+            guard valid else {
+                sheetState = .noCredentials
+                return
+            }
+
+            // Force-sync from All Apps skips the marketing/consent screen for
+            // users who have already opted in and just want to refresh the wall.
+            if forceStart && syncConsented {
+                startSync()
+            } else {
+                sheetState = .ready
+            }
         } catch {
             sheetState = .noCredentials
         }
@@ -230,94 +253,28 @@ struct AppWallSyncSheet: View {
 
         Task {
             do {
-                let ascService = AppStoreConnectService(credentials: credentials)
-                let irisSession = await MainActor.run { IrisSession.load() }
-                // Only sync apps that exist as local Blitz projects — not the entire developer account
-                let localBundleIds = Set(appState.projectManager.projects.compactMap {
-                    $0.metadata.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines)
-                }.filter { !$0.isEmpty })
-
-                let allLiveApps = try await ascService.fetchAllApps(appStoreStateFilter: "READY_FOR_SALE")
-                let ascApps = allLiveApps.filter { localBundleIds.contains($0.bundleId) }
-
-                // Fetch all sync data for each app in parallel.
-                var syncDataItems: [AppWallSyncData] = []
-                var versionFetchFailures: [String] = []
-                await withTaskGroup(of: (AppWallSyncData?, String?).self) { group in
-                    for app in ascApps {
-                        group.addTask {
-                            do {
-                                let versions = try await ascService.fetchAppStoreVersions(appId: app.id)
-                                guard !versions.isEmpty else {
-                                    return (nil, "\(app.bundleId) (No App Store versions were returned)")
-                                }
-                                let syncData = await AppWallSyncDataBuilder.build(
-                                    app: app,
-                                    versions: versions,
-                                    service: ascService,
-                                    irisSession: irisSession
-                                )
-                                return (syncData, nil)
-                            } catch {
-                                return (nil, "\(app.bundleId) (\(error.localizedDescription))")
-                            }
-                        }
-                    }
-                    for await (syncData, failure) in group {
-                        if let syncData {
-                            syncDataItems.append(syncData)
-                        } else {
-                            if let failure {
-                                Log("[AppWall] sync data fetch failed: \(failure)")
-                                versionFetchFailures.append(failure)
-                            }
-                        }
-                    }
-                }
-
-                let result = try await AppWallService.shared.syncApps(
-                    credentials: credentials,
-                    syncData: syncDataItems
+                let result = try await AppWallSyncRunner.syncLocalLiveApps(
+                    projects: appState.projectManager.projects,
+                    credentials: credentials
                 )
 
-                if !result.successfulBundleIds.isEmpty {
-                    // Persist only confirmed successes locally — used for the
-                    // "unsynced" banner check without re-querying the wall.
-                    AppWallSyncedBundleIds.add(result.successfulBundleIds)
-                }
-
-                let pushFailures = result.failures.map { "\($0.bundleId) (\($0.reason))" }
-                let allFailures = versionFetchFailures + pushFailures
-
-                if allFailures.isEmpty {
+                if result.failures.isEmpty {
                     syncConsented = true
+                    onSyncCompleted?()
                     sheetState = .done(count: result.successCount, warning: nil)
                 } else if result.successCount > 0 {
                     syncConsented = true
+                    onSyncCompleted?()
                     sheetState = .done(
                         count: result.successCount,
-                        warning: summarizeFailures(allFailures)
+                        warning: result.warning
                     )
                 } else {
-                    sheetState = .error(summarizeFailures(allFailures))
+                    sheetState = .error(result.warning ?? "One or more apps failed to sync.")
                 }
             } catch {
                 sheetState = .error(error.localizedDescription)
             }
         }
-    }
-
-    private func summarizeFailures(_ failures: [String]) -> String {
-        let uniqueFailures = Array(NSOrderedSet(array: failures)) as? [String] ?? failures
-        let preview = uniqueFailures.prefix(3).joined(separator: ", ")
-        let remainingCount = uniqueFailures.count - min(uniqueFailures.count, 3)
-
-        if preview.isEmpty {
-            return "One or more apps failed to sync."
-        }
-        if remainingCount > 0 {
-            return "\(uniqueFailures.count) apps failed to sync: \(preview), and \(remainingCount) more."
-        }
-        return "\(uniqueFailures.count) app\(uniqueFailures.count == 1 ? "" : "s") failed to sync: \(preview)."
     }
 }
