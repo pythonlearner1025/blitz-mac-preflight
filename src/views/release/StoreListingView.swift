@@ -23,6 +23,20 @@ struct StoreListingView: View {
         asc.activeStoreListingLocale() ?? ""
     }
 
+    private var selectedVersionBinding: Binding<String> {
+        Binding(
+            get: { asc.selectedVersion?.id ?? "" },
+            set: { newValue in
+                guard !newValue.isEmpty else { return }
+                asc.prepareForVersionSelection(newValue)
+                Task {
+                    await asc.refreshTabData(.storeListing)
+                    populateCurrentFields()
+                }
+            }
+        )
+    }
+
     private var selectedLocaleBinding: Binding<String> {
         Binding(
             get: { currentLocale },
@@ -71,35 +85,40 @@ struct StoreListingView: View {
 
         VStack(spacing: 0) {
             // Toolbar
-            HStack {
-                if !locales.isEmpty {
-                    Picker("Locale", selection: selectedLocaleBinding) {
-                        ForEach(locales) { loc in
-                            Text(loc.attributes.locale).tag(loc.attributes.locale)
+            if asc.app != nil {
+                ASCVersionPickerBar(
+                    asc: asc,
+                    selection: selectedVersionBinding,
+                    onCreateUpdate: { asc.showCreateUpdateSheet = true }
+                ) {
+                    if !locales.isEmpty {
+                        Picker("Locale", selection: selectedLocaleBinding) {
+                            ForEach(locales) { loc in
+                                Text(loc.attributes.locale).tag(loc.attributes.locale)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .frame(width: 160)
+                    }
+                    if isSaving {
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.mini)
+                            Text("Saving…").font(.caption).foregroundStyle(.secondary)
                         }
                     }
-                    .pickerStyle(.menu)
-                    .frame(width: 160)
-                }
-                Spacer()
-                if isSaving {
-                    HStack(spacing: 4) {
-                        ProgressView().controlSize(.mini)
-                        Text("Saving…").font(.caption).foregroundStyle(.secondary)
+                    if let appId = asc.app?.id {
+                        Link(destination: URL(string: "https://appstoreconnect.apple.com/apps/\(appId)/appstore")!) {
+                            Image(systemName: "arrow.up.right.square")
+                                .font(.callout)
+                        }
+                        .help("Open in App Store Connect")
                     }
+                    ASCTabRefreshButton(asc: asc, tab: .storeListing, helpText: "Refresh store listing data")
                 }
-                if let appId = asc.app?.id {
-                    Link(destination: URL(string: "https://appstoreconnect.apple.com/apps/\(appId)/appstore")!) {
-                        Image(systemName: "arrow.up.right.square")
-                            .font(.callout)
-                    }
-                    .help("Open in App Store Connect")
-                }
-                ASCTabRefreshButton(asc: asc, tab: .storeListing, helpText: "Refresh store listing data")
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+                .background(.background.secondary)
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
-            .background(.background.secondary)
 
             Divider()
 

@@ -101,6 +101,17 @@ struct ScreenshotsView: View {
         )
     }
 
+    private var selectedVersionBinding: Binding<String> {
+        Binding(
+            get: { asc.selectedVersion?.id ?? "" },
+            set: { newValue in
+                guard !newValue.isEmpty else { return }
+                asc.prepareForVersionSelection(newValue)
+                Task { await loadData() }
+            }
+        )
+    }
+
     private var currentTrack: [TrackSlot?] {
         asc.trackSlotsForDisplayType(selectedDevice.ascDisplayType, locale: currentLocale)
     }
@@ -122,23 +133,26 @@ struct ScreenshotsView: View {
         ) {
             ASCTabContent(appState: appState, asc: asc, tab: .screenshots, platform: appState.activeProject?.platform ?? .iOS) {
                 VStack(spacing: 0) {
-                    HStack {
-                        Text("Screenshots")
-                            .font(.title2.weight(.semibold))
-                        if !asc.localizations.isEmpty {
-                            Picker("Locale", selection: selectedLocaleBinding) {
-                                ForEach(asc.localizations) { localization in
-                                    Text(localization.attributes.locale).tag(localization.attributes.locale)
+                    if asc.app != nil {
+                        ASCVersionPickerBar(
+                            asc: asc,
+                            selection: selectedVersionBinding,
+                            onCreateUpdate: { asc.showCreateUpdateSheet = true }
+                        ) {
+                            if !asc.localizations.isEmpty {
+                                Picker("Locale", selection: selectedLocaleBinding) {
+                                    ForEach(asc.localizations) { localization in
+                                        Text(localization.attributes.locale).tag(localization.attributes.locale)
+                                    }
                                 }
+                                .pickerStyle(.menu)
+                                .frame(width: 160)
                             }
-                            .pickerStyle(.menu)
-                            .frame(width: 160)
+                            ASCTabRefreshButton(asc: asc, tab: .screenshots, helpText: "Refresh screenshots")
                         }
-                        Spacer()
-                        ASCTabRefreshButton(asc: asc, tab: .screenshots, helpText: "Refresh screenshots")
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
 
                     Divider()
 
