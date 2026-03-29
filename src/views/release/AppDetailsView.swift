@@ -78,8 +78,7 @@ struct AppDetailsView: View {
             if asc.app != nil {
                 ASCVersionPickerBar(
                     asc: asc,
-                    selection: selectedVersionBinding,
-                    onCreateUpdate: { asc.showCreateUpdateSheet = true }
+                    selection: selectedVersionBinding
                 ) {
                     ASCTabRefreshButton(asc: asc, tab: .appDetails, helpText: "Refresh app details")
                 }

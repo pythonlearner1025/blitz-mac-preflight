@@ -10,6 +10,7 @@ struct AllAppsView: View {
     @State private var isLoadingNextPage = false
     @State private var loadError: String?
     @State private var showSyncSheet = false
+    @State private var syncSheetForceStart = false
     @State private var selectedApp: AppWallApp?
     @State private var dashboardSummary = DashboardSummaryStore.shared
 
@@ -47,6 +48,7 @@ struct AllAppsView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(DottedCanvasBackground())
         .overlay(alignment: .bottomTrailing) {
             if unsyncedLiveCount > 0 {
                 unsyncedBanner
@@ -55,8 +57,14 @@ struct AllAppsView: View {
         .task(id: syncConsented) {
             await handleConsentState()
         }
-        .sheet(isPresented: $showSyncSheet) {
-            AppWallSyncSheet(appState: appState)
+        .sheet(isPresented: $showSyncSheet, onDismiss: handleSyncSheetDismissed) {
+            AppWallSyncSheet(
+                appState: appState,
+                forceStart: syncSheetForceStart,
+                onSyncCompleted: {
+                    Task { await loadApps() }
+                }
+            )
         }
         .sheet(item: $selectedApp) { app in
             AppWallDetailView(app: app)
@@ -67,8 +75,19 @@ struct AllAppsView: View {
         if syncConsented {
             await loadApps()
         } else {
-            showSyncSheet = true
+            presentSyncSheet()
         }
+    }
+
+    private func presentSyncSheet(forceStart: Bool = false) {
+        syncSheetForceStart = forceStart
+        showSyncSheet = true
+    }
+
+    private func handleSyncSheetDismissed() {
+        syncSheetForceStart = false
+        guard syncConsented else { return }
+        Task { await loadApps() }
     }
 
     // MARK: - Sub-views
@@ -84,6 +103,7 @@ struct AllAppsView: View {
 
     private func errorView(message: String) -> some View {
         VStack(spacing: 14) {
+            forceSyncActionRow
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 36))
                 .foregroundStyle(.secondary)
@@ -102,6 +122,7 @@ struct AllAppsView: View {
 
     private var emptyView: some View {
         VStack(spacing: 14) {
+            forceSyncActionRow
             Image(systemName: "globe")
                 .font(.system(size: 36))
                 .foregroundStyle(.secondary)
@@ -116,8 +137,9 @@ struct AllAppsView: View {
     private var appsGrid: some View {
         ScrollView {
             VStack(spacing: 16) {
+                forceSyncActionRow
                 LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 140, maximum: 180), spacing: 16)],
+                    columns: [GridItem(.adaptive(minimum: 140, maximum: 180), spacing: 8)],
                     spacing: 16
                 ) {
                     ForEach(apps) { app in
@@ -131,6 +153,22 @@ struct AllAppsView: View {
                 }
             }
             .padding(20)
+        }
+    }
+
+    @ViewBuilder
+    private var forceSyncActionRow: some View {
+        // NOTE: uncomment for debugging purposes
+        if false {
+            HStack {
+                Spacer()
+                Button("Force Sync") {
+                    presentSyncSheet(forceStart: true)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -168,7 +206,7 @@ struct AllAppsView: View {
             Text("\(unsyncedLiveCount) live app\(unsyncedLiveCount == 1 ? "" : "s") not on the wall")
                 .font(.callout.weight(.medium))
             Button("Sync Now") {
-                showSyncSheet = true
+                presentSyncSheet()
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
@@ -207,8 +245,6 @@ struct AllAppsView: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity)
-        .background(Color(.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     @ViewBuilder
