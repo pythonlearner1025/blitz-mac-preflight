@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.31
+- New App Wall with synced app details and live status updates
+- Version-aware ASC release workflow with create/update flow and unified version picker
+- Better ASC diagnostics, fetch resilience, and project switching reliability
+- Dashboard and app grid polish, plus improved launch logging
+
 ## 1.0.30
 - New built-in terminal 
 - New Dashboard and App navigation

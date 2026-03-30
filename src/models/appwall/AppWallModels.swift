@@ -103,6 +103,24 @@ struct AppWallFeedback: Decodable, Identifiable {
     }
 }
 
+// MARK: - Summary
+
+struct AppWallSummary: Decodable, Sendable {
+    let totalApps: Int
+    let liveApps: Int
+    let avgReviewHours: Double?
+    let rejectionRatio: Double?
+    let avgRejectionsBeforeSuccess: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case totalApps = "totalApps"
+        case liveApps = "liveApps"
+        case avgReviewHours = "avgReviewHours"
+        case rejectionRatio = "rejectionRatio"
+        case avgRejectionsBeforeSuccess = "avgRejectionsBeforeSuccess"
+    }
+}
+
 // MARK: - List Response
 
 struct AppWallListResponse<T: Decodable>: Decodable {

@@ -12,6 +12,7 @@ struct AppWallSyncEventPayload {
     let versionString: String
     let eventType: String
     let occurredAt: String
+    let appleState: String?
     let accuracy: String?
     let source: String?
     let notes: String?
@@ -25,6 +26,7 @@ struct AppWallSyncEventPayload {
         self.versionString = versionString
         self.eventType = historyEvent.eventType.rawValue
         self.occurredAt = occurredAt
+        self.appleState = historyEvent.appleState?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.accuracy = historyEvent.accuracy.rawValue
         self.source = historyEvent.source.rawValue
         self.notes = historyEvent.note
@@ -37,6 +39,7 @@ struct AppWallSyncEventPayload {
             "occurred_at": occurredAt,
         ]
         if let ascSubmissionId, !ascSubmissionId.isEmpty { payload["asc_submission_id"] = ascSubmissionId }
+        if let appleState, !appleState.isEmpty { payload["apple_state"] = appleState }
         if let accuracy, !accuracy.isEmpty { payload["accuracy"] = accuracy }
         if let source, !source.isEmpty { payload["source"] = source }
         if let notes, !notes.isEmpty { payload["notes"] = notes }
@@ -51,12 +54,14 @@ struct AppWallSyncFeedbackPayload {
     let reviewerMessage: String?
     let guidelineIds: [String]
     let occurredAt: String
+    let isPublic: Bool
 
     var jsonObject: [String: Any] {
         var payload: [String: Any] = [
             "version_string": versionString,
             "feedback_type": feedbackType,
             "occurred_at": occurredAt,
+            "is_public": isPublic,
         ]
         if !rejectionReasons.isEmpty { payload["rejection_reasons"] = rejectionReasons }
         if let reviewerMessage, !reviewerMessage.isEmpty { payload["reviewer_message"] = reviewerMessage }
@@ -105,8 +110,10 @@ enum AppWallSyncDataBuilder {
         cycles: [IrisFeedbackCycle],
         versions: [ASCAppStoreVersion],
     ) -> [AppWallSyncFeedbackPayload] {
-        cycles
-            .compactMap { cycle in
+        let shareReviewerFeedback = UserDefaults.standard.object(forKey: "appWallShareReviewerFeedback") as? Bool ?? true
+
+        return cycles
+            .compactMap { cycle -> AppWallSyncFeedbackPayload? in
                 let versionString = cycle.versionString?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 guard !versionString.isEmpty else { return nil }
 
@@ -140,7 +147,8 @@ enum AppWallSyncDataBuilder {
                     rejectionReasons: rejectionReasons,
                     reviewerMessage: reviewerMessage,
                     guidelineIds: guidelineIds,
-                    occurredAt: cycle.occurredAt
+                    occurredAt: cycle.occurredAt,
+                    isPublic: shareReviewerFeedback
                 )
             }
             .sorted { irisArchiveSortDate($0.occurredAt) > irisArchiveSortDate($1.occurredAt) }

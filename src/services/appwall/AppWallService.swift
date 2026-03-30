@@ -17,8 +17,17 @@ private extension Data {
 actor AppWallService {
     static let shared = AppWallService()
 
-    private let wallBaseURL = "https://appwall.blitzmen.workers.dev"
+    private let defaultWallBaseURL = "https://appwall.blitzmen.workers.dev"
     private let session = URLSession.shared
+
+    private var wallBaseURL: String {
+        let override = UserDefaults.standard.string(forKey: "appWallBaseURLOverride")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let override, !override.isEmpty {
+            return override
+        }
+        return defaultWallBaseURL
+    }
 
     struct SyncFailure: Sendable {
         let bundleId: String
@@ -240,6 +249,30 @@ actor AppWallService {
             body: ["where": "app_id == '\(appId)'", "order": "-occurred_at", "limit": 50]
         )
         return resp.items
+    }
+
+    // MARK: - Summary
+
+    func fetchSummary(category: String? = nil, locale: String? = nil) async throws -> AppWallSummary {
+        var components = URLComponents(string: "\(wallBaseURL)/api/v1/summary")
+        guard components != nil else { throw AppWallError.invalidURL }
+        var queryItems: [URLQueryItem] = []
+        if let category { queryItems.append(URLQueryItem(name: "category", value: category)) }
+        if let locale { queryItems.append(URLQueryItem(name: "locale", value: locale)) }
+        if !queryItems.isEmpty { components?.queryItems = queryItems }
+        guard let url = components?.url else { throw AppWallError.invalidURL }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 15
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw AppWallError.fetchFailed("summary: no HTTP response")
+        }
+        let bodyStr = String(data: data, encoding: .utf8) ?? ""
+        Log("[AppWall] summary ← \(http.statusCode): \(bodyStr.prefix(300))")
+        guard (200..<300).contains(http.statusCode) else {
+            throw AppWallError.fetchFailed("HTTP \(http.statusCode): \(bodyStr)")
+        }
+        return try JSONDecoder().decode(AppWallSummary.self, from: data)
     }
 
     // MARK: - Private helpers

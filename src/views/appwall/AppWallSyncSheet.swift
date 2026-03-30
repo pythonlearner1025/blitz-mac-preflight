@@ -6,6 +6,8 @@ struct AppWallSyncSheet: View {
     let onSyncCompleted: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @AppStorage("appWallSyncConsented") private var syncConsented: Bool = false
+    @AppStorage("appWallSyncPromptShown") private var syncPromptShown: Bool = false
+    @AppStorage("appWallShareReviewerFeedback") private var shareReviewerFeedback: Bool = true
 
     @State private var sheetState: SheetState = .validating
 
@@ -46,6 +48,17 @@ struct AppWallSyncSheet: View {
             }
         }
         .frame(width: 480)
+        .overlay(alignment: .topTrailing) {
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24, height: 24)
+                    .background(.background.secondary, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(14)
+        }
         .task { await validateAndPrepare() }
     }
 
@@ -119,7 +132,15 @@ struct AppWallSyncSheet: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 16) {
-                Text("Syncing shares your app's public store listing info (name, icon, bundle ID) and submission history. You can opt out at any time.")
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Share reviewer feedback", isOn: $shareReviewerFeedback)
+
+                    Text("Optional. Publishes synced reviewer messages, rejection reasons, and guideline references on the App Wall. Leave off to keep feedback content private.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text("Syncing shares your app's public store listing info (name, icon, bundle ID) and submission history. To verify that you own each app before accepting a sync, Blitz also sends a short-lived App Store Connect JWT to the App Wall backend, which uses it to verify ownership with Apple. You can opt out at any time.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -221,6 +242,8 @@ struct AppWallSyncSheet: View {
     // MARK: - Actions
 
     private func validateAndPrepare() async {
+        syncPromptShown = true
+
         guard let credentials = ASCCredentials.load() else {
             sheetState = .noCredentials
             return

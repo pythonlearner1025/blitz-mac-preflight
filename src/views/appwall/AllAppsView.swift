@@ -3,6 +3,7 @@ import SwiftUI
 struct AllAppsView: View {
     @Bindable var appState: AppState
     @AppStorage("appWallSyncConsented") private var syncConsented: Bool = false
+    @AppStorage("appWallSyncPromptShown") private var syncPromptShown: Bool = false
 
     @State private var apps: [AppWallApp] = []
     @State private var totalCount = 0
@@ -13,6 +14,9 @@ struct AllAppsView: View {
     @State private var syncSheetForceStart = false
     @State private var selectedApp: AppWallApp?
     @State private var dashboardSummary = DashboardSummaryStore.shared
+
+    @State private var summary: AppWallSummary?
+    @State private var isSummaryLoading = false
 
     // Reads from UserDefaults so retries/partial syncs are reflected without
     // needing a network round-trip or a full view reset.
@@ -73,19 +77,23 @@ struct AllAppsView: View {
 
     private func handleConsentState() async {
         await loadApps()
-        if !syncConsented {
-            presentSyncSheet()
-        }
+        await loadSummary()
+        // Temporary: always present the consent sheet while iterating on the UI.
+        presentSyncSheet()
     }
 
     private func presentSyncSheet(forceStart: Bool = false) {
+        syncPromptShown = true
         syncSheetForceStart = forceStart
         showSyncSheet = true
     }
 
     private func handleSyncSheetDismissed() {
         syncSheetForceStart = false
-        Task { await loadApps() }
+        Task {
+            await loadApps()
+            await loadSummary()
+        }
     }
 
     // MARK: - Sub-views
@@ -136,6 +144,7 @@ struct AllAppsView: View {
         ScrollView {
             VStack(spacing: 16) {
                 forceSyncActionRow
+                summaryCards
                 LazyVGrid(
                     columns: [GridItem(.adaptive(minimum: 140, maximum: 180), spacing: 8)],
                     spacing: 16
@@ -194,6 +203,103 @@ struct AllAppsView: View {
         .padding(.top, 8)
     }
 
+    // MARK: - Summary Cards
+
+    private var summaryCards: some View {
+        LazyVGrid(
+            columns: [
+                GridItem(.flexible()),
+                GridItem(.flexible()),
+                GridItem(.flexible()),
+                GridItem(.flexible()),
+                GridItem(.flexible()),
+            ],
+            spacing: 12
+        ) {
+            summaryCard(
+                title: "Total Apps",
+                value: summaryValue { "\($0.totalApps)" },
+                color: .blue,
+                icon: "square.grid.2x2.fill"
+            )
+            summaryCard(
+                title: "Live Apps",
+                value: summaryValue { "\($0.liveApps)" },
+                color: .green,
+                icon: "checkmark.seal.fill"
+            )
+            summaryCard(
+                title: "Avg Review Time",
+                value: summaryValue { formatReviewHours($0.avgReviewHours) },
+                color: .orange,
+                icon: "clock.fill"
+            )
+            summaryCard(
+                title: "Rejection Ratio",
+                value: summaryValue { formatPercent($0.rejectionRatio) },
+                color: .red,
+                icon: "xmark.seal.fill"
+            )
+            summaryCard(
+                title: "Avg Rejections",
+                value: summaryValue { formatDecimal($0.avgRejectionsBeforeSuccess) },
+                color: .purple,
+                icon: "arrow.counterclockwise"
+            )
+        }
+    }
+
+    private func summaryCard(title: String, value: String, color: Color, icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.callout)
+                    .foregroundStyle(color)
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if isSummaryLoading && summary == nil {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(height: 28)
+            } else {
+                Text(value)
+                    .font(.system(size: 28, weight: .bold, design: .rounded))
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background.secondary)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func summaryValue(_ transform: (AppWallSummary) -> String) -> String {
+        guard let summary else { return "--" }
+        return transform(summary)
+    }
+
+    private func formatReviewHours(_ hours: Double?) -> String {
+        guard let hours else { return "--" }
+        if hours < 1 {
+            return String(format: "%.0fm", hours * 60)
+        }
+        return String(format: "%.1fh", hours)
+    }
+
+    private func formatPercent(_ ratio: Double?) -> String {
+        guard let ratio else { return "--" }
+        return String(format: "%.0f%%", ratio * 100)
+    }
+
+    private func formatDecimal(_ value: Double?) -> String {
+        guard let value else { return "--" }
+        if value == value.rounded() {
+            return String(format: "%.0f", value)
+        }
+        return String(format: "%.1f", value)
+    }
+
     // MARK: - Unsynced Banner
 
     private var unsyncedBanner: some View {
@@ -221,23 +327,11 @@ struct AllAppsView: View {
         VStack(spacing: 8) {
             appIcon(app: app)
 
-            Text(app.name)
-                .font(.callout.weight(.medium))
-                .lineLimit(1)
-
-            if let state = app.currentState {
-                stateLabel(state)
-                    .font(.caption2)
-                    .lineLimit(1)
-            } else if let category = app.primaryCategory {
-                Text(category.replacingOccurrences(of: "_", with: " ").capitalized)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            } else {
-                Text(app.bundleId)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 3) {
+                stateIcon(for: app.currentState)
+                    .font(.system(size: 9))
+                Text(app.name)
+                    .font(.callout.weight(.medium))
                     .lineLimit(1)
             }
         }
@@ -277,24 +371,34 @@ struct AllAppsView: View {
     }
 
     @ViewBuilder
-    private func stateLabel(_ state: String) -> some View {
-        switch state.lowercased() {
+    private func stateIcon(for state: String?) -> some View {
+        switch state?.lowercased() {
         case "ready_for_sale":
-            Label("Live", systemImage: "checkmark.circle.fill")
+            Image(systemName: "checkmark.circle.fill")
                 .foregroundStyle(.green)
         case "waiting_for_review", "in_review":
-            Label("In Review", systemImage: "clock.fill")
+            Image(systemName: "clock.fill")
                 .foregroundStyle(.orange)
         case "rejected":
-            Label("Rejected", systemImage: "xmark.circle.fill")
+            Image(systemName: "xmark.circle.fill")
                 .foregroundStyle(.red)
         default:
-            Text(state.replacingOccurrences(of: "_", with: " ").capitalized)
-                .foregroundStyle(.secondary)
+            EmptyView()
         }
     }
 
     // MARK: - Data Loading
+
+    private func loadSummary() async {
+        guard !isSummaryLoading else { return }
+        isSummaryLoading = true
+        defer { isSummaryLoading = false }
+        do {
+            summary = try await AppWallService.shared.fetchSummary()
+        } catch {
+            Log("[AppWall] summary fetch failed: \(error.localizedDescription)")
+        }
+    }
 
     private func loadApps() async {
         await loadApps(reset: true)

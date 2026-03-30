@@ -4,6 +4,9 @@ struct SettingsView: View {
     @Bindable var settings: SettingsService
     @Bindable var appState: AppState
     var mcpServer: MCPServerService?
+    @AppStorage("appWallSyncConsented") private var appWallSyncEnabled: Bool = false
+    @AppStorage("appWallSyncPromptShown") private var appWallSyncPromptShown: Bool = false
+    @AppStorage("appWallShareReviewerFeedback") private var appWallShareReviewerFeedback: Bool = true
 
     @State private var showClearCredentialsConfirm = false
     @State private var showTerminalPicker = false
@@ -37,6 +40,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             defaultsSection
+            appWallSection
 
             Section("Simulator") {
                 Toggle("Show Cursor Overlay", isOn: $settings.showCursor)
@@ -316,6 +320,32 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
+            }
+        }
+    }
+
+    private var appWallSection: some View {
+        Section("App Wall") {
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("Sync to App Wall", isOn: Binding(
+                    get: { appWallSyncEnabled },
+                    set: { newValue in
+                        appWallSyncEnabled = newValue
+                        appWallSyncPromptShown = true
+                    }
+                ))
+
+                Text("Controls whether Blitz syncs your apps to the App Wall and participates in launch auto-sync.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("Share reviewer feedback", isOn: $appWallShareReviewerFeedback)
+
+                Text("Publishes synced reviewer messages, rejection reasons, and guideline references on the App Wall. Turn this off to keep reviewer feedback private while still syncing app and submission history.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
     }

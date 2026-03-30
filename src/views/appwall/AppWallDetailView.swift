@@ -6,6 +6,7 @@ struct AppWallDetailView: View {
     @State private var versions: [AppWallVersion] = []
     @State private var events: [AppWallEvent] = []
     @State private var feedbacks: [AppWallFeedback] = []
+    @Environment(\.dismiss) private var dismiss
     @State private var isLoading = true
     @State private var loadError: String?
 
@@ -56,6 +57,17 @@ struct AppWallDetailView: View {
             }
         }
         .frame(width: 560)
+        .overlay(alignment: .topTrailing) {
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24, height: 24)
+                    .background(.background.secondary, in: Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(14)
+        }
         .task { await loadAll() }
     }
 
@@ -66,8 +78,11 @@ struct AppWallDetailView: View {
             appIcon(size: 72)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(app.name)
-                    .font(.title2.weight(.bold))
+                HStack(spacing: 6) {
+                    headerStateIcon
+                    Text(app.name)
+                        .font(.title2.weight(.bold))
+                }
 
                 Text(app.bundleId)
                     .font(.system(.caption, design: .monospaced))
@@ -85,8 +100,15 @@ struct AppWallDetailView: View {
                             .background(Color.secondary.opacity(0.12), in: Capsule())
                             .foregroundStyle(.secondary)
                     }
-                    if let state = app.currentState {
-                        stateBadge(state)
+                    if let storeURL = URL(string: "https://apps.apple.com/app/id\(app.ascAppId)") {
+                        Link(destination: storeURL) {
+                            Label("App Store", systemImage: "arrow.up.forward.app")
+                                .font(.caption.weight(.medium))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Color.blue.opacity(0.1), in: Capsule())
+                                .foregroundStyle(.blue)
+                        }
                     }
                 }
             }
@@ -120,6 +142,26 @@ struct AppWallDetailView: View {
             Image(systemName: "app")
                 .font(.system(size: size * 0.4))
                 .foregroundStyle(Color.accentColor.opacity(0.5))
+        }
+    }
+
+    @ViewBuilder
+    private var headerStateIcon: some View {
+        switch app.currentState?.lowercased() {
+        case "ready_for_sale":
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 14))
+                .foregroundStyle(.green)
+        case "waiting_for_review", "in_review":
+            Image(systemName: "clock.fill")
+                .font(.system(size: 14))
+                .foregroundStyle(.orange)
+        case "rejected":
+            Image(systemName: "xmark.circle.fill")
+                .font(.system(size: 14))
+                .foregroundStyle(.red)
+        default:
+            EmptyView()
         }
     }
 
