@@ -80,6 +80,24 @@ import Testing
     #expect(state == "PREPARE_FOR_SUBMISSION")
 }
 
+@Test func appWallCurrentVersionPrefersLiveVersionOverNewerDraft() {
+    let version = ASCReleaseStatus.appWallCurrentVersion(for: [
+        makeVersion(id: "draft", state: "PREPARE_FOR_SUBMISSION", createdDate: "2026-03-21T00:00:00Z"),
+        makeVersion(id: "live", state: "READY_FOR_SALE", createdDate: "2026-03-20T00:00:00Z"),
+    ])
+
+    #expect(version?.id == "live")
+}
+
+@Test func appWallCurrentVersionPrefersCurrentPendingReviewUpdateOverOlderLiveVersion() {
+    let version = ASCReleaseStatus.appWallCurrentVersion(for: [
+        makeVersion(id: "review", state: "IN_REVIEW", createdDate: "2026-03-21T00:00:00Z"),
+        makeVersion(id: "live", state: "READY_FOR_SALE", createdDate: "2026-03-20T00:00:00Z"),
+    ])
+
+    #expect(version?.id == "review")
+}
+
 private func makeVersion(id: String, state: String, createdDate: String) -> ASCAppStoreVersion {
     ASCAppStoreVersion(
         id: id,

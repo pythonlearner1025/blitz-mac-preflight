@@ -41,7 +41,7 @@ struct AllAppsView: View {
                 loadingView
             } else if let error = loadError, apps.isEmpty {
                 errorView(message: error)
-            } else if apps.isEmpty && syncConsented {
+            } else if apps.isEmpty {
                 emptyView
             } else {
                 appsGrid
@@ -72,9 +72,8 @@ struct AllAppsView: View {
     }
 
     private func handleConsentState() async {
-        if syncConsented {
-            await loadApps()
-        } else {
+        await loadApps()
+        if !syncConsented {
             presentSyncSheet()
         }
     }
@@ -86,7 +85,6 @@ struct AllAppsView: View {
 
     private func handleSyncSheetDismissed() {
         syncSheetForceStart = false
-        guard syncConsented else { return }
         Task { await loadApps() }
     }
 

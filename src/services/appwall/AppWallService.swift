@@ -141,6 +141,7 @@ actor AppWallService {
                 failures.append(SyncFailure(bundleId: ascApp.bundleId, reason: reason))
                 continue
             }
+            let currentWallVersion = ASCReleaseStatus.appWallCurrentVersion(for: versions) ?? latestVersion
 
             var appPayload: [String: Any] = [
                 "asc_app_id": ascApp.id,
@@ -153,7 +154,7 @@ actor AppWallService {
                 if let icon = meta.iconUrl { appPayload["icon_url"] = icon }
                 if let cat = meta.category { appPayload["primary_category"] = cat }
             }
-            appPayload["latest_version"] = latestVersion.attributes.versionString
+            appPayload["latest_version"] = currentWallVersion.attributes.versionString
             // The app-wall card shows one summary state. Use the derived
             // dashboard-style status so a newer draft update does not mask a
             // currently live release as "Prepare for Submission".
