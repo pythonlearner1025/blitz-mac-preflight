@@ -10,6 +10,10 @@ struct AppWallDetailView: View {
     @State private var isLoading = true
     @State private var loadError: String?
 
+    private var displayedEvents: [AppWallEvent] {
+        reconstructLiveEvents(from: events)
+    }
+
     // MARK: - Data Loading
 
     private func loadAll() async {
@@ -249,14 +253,14 @@ struct AppWallDetailView: View {
 
     private var eventsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            sectionHeader("Submission History", icon: "clock.arrow.circlepath", count: events.count)
+            sectionHeader("Submission History", icon: "clock.arrow.circlepath", count: displayedEvents.count)
 
-            if events.isEmpty {
+            if displayedEvents.isEmpty {
                 emptyPlaceholder("No submission events synced yet")
             } else {
                 VStack(spacing: 0) {
-                    ForEach(Array(events.enumerated()), id: \.element.id) { idx, event in
-                        eventRow(event, isLast: idx == events.count - 1)
+                    ForEach(Array(displayedEvents.enumerated()), id: \.element.id) { idx, event in
+                        eventRow(event, isLast: idx == displayedEvents.count - 1)
                     }
                 }
             }
@@ -290,7 +294,7 @@ struct AppWallDetailView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Text(formatDate(event.occurredAt))
+                    Text(displayDate(for: event))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -460,6 +464,75 @@ struct AppWallDetailView: View {
             return out.string(from: date)
         }
         return String(iso.prefix(10))
+    }
+
+    private func displayDate(for event: AppWallEvent) -> String {
+        if event.eventType == "live", event.accuracy == "derived" {
+            return "-"
+        }
+        return formatDate(event.occurredAt)
+    }
+
+    private func reconstructLiveEvents(from rawEvents: [AppWallEvent]) -> [AppWallEvent] {
+        let nonLiveEvents = rawEvents.filter { $0.eventType != "live" }
+        guard hasAnyLiveVersion, !nonLiveEvents.isEmpty else {
+            return rawEvents
+        }
+
+        let submittedVersionAnchors = submissionVersionAnchors(in: nonLiveEvents)
+        guard !submittedVersionAnchors.isEmpty else {
+            return nonLiveEvents
+        }
+
+        var result: [AppWallEvent] = []
+        for (index, event) in nonLiveEvents.enumerated() {
+            if let liveEvent = submittedVersionAnchors[index] {
+                result.append(liveEvent)
+            }
+            result.append(event)
+        }
+        return result
+    }
+
+    private var hasAnyLiveVersion: Bool {
+        versions.contains { ASCReleaseStatus.isLive($0.state) }
+    }
+
+    private func submissionVersionAnchors(in events: [AppWallEvent]) -> [Int: AppWallEvent] {
+        let liveVersionStrings = Set(
+            versions.compactMap { version in
+                ASCReleaseStatus.isLive(version.state) ? version.versionString : nil
+            }
+        )
+
+        let versionsWithSubmittedEvents = Set(
+            events.compactMap { event in
+                event.eventType == "submitted" && liveVersionStrings.contains(event.versionString)
+                    ? event.versionString
+                    : nil
+            }
+        )
+
+        var firstEventIndexByVersion: [String: Int] = [:]
+        var anchorByIndex: [Int: AppWallEvent] = [:]
+
+        for (index, event) in events.enumerated() {
+            let versionString = event.versionString
+            guard versionsWithSubmittedEvents.contains(versionString) else { continue }
+            guard firstEventIndexByVersion[versionString] == nil else { continue }
+            firstEventIndexByVersion[versionString] = index
+            anchorByIndex[index] = AppWallEvent(
+                id: "derived-live-\(versionString)-\(index)",
+                versionString: versionString,
+                eventType: "live",
+                occurredAt: event.occurredAt,
+                source: "",
+                accuracy: "derived",
+                notes: nil
+            )
+        }
+
+        return anchorByIndex
     }
 
 

@@ -36,8 +36,8 @@ final class AutoUpdateManager {
     private var downloadURL: String?
     private var downloadFilename: String?
 
-    //private static let releasesURL = "https://api.github.com/repos/blitzdotdev/blitz-mac/releases/latest"
-    private static let releasesURL = "https://api.github.com/repos/pythonlearner1025/blitz-mac-preflight/releases/latest"
+    private static let releasesURL = "https://api.github.com/repos/blitzdotdev/blitz-mac/releases/latest"
+    //private static let releasesURL = "https://api.github.com/repos/pythonlearner1025/blitz-mac-preflight/releases/latest"
 
 
     /// Current app version from Info.plist (falls back to "0.0.0" in dev builds).

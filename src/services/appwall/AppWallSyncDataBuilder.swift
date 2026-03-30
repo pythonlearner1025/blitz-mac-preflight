@@ -95,7 +95,7 @@ enum AppWallSyncDataBuilder {
             ascManager.rebuildSubmissionHistory(appId: app.id)
         }
 
-        let events = ascManager.submissionHistoryEvents.compactMap(AppWallSyncEventPayload.init)
+        let events = buildEventPayloads(ascManager: ascManager, versions: versions)
         let feedbacks = buildFeedbackPayloads(cycles: ascManager.irisFeedbackCycles, versions: versions)
 
         return AppWallSyncData(
@@ -152,5 +152,86 @@ enum AppWallSyncDataBuilder {
                 )
             }
             .sorted { irisArchiveSortDate($0.occurredAt) > irisArchiveSortDate($1.occurredAt) }
+    }
+
+    @MainActor
+    private static func buildEventPayloads(
+        ascManager: ASCManager,
+        versions: [ASCAppStoreVersion]
+    ) -> [AppWallSyncEventPayload] {
+        let historyEvents = ascManager.submissionHistoryEvents
+        let syntheticLiveEvents = syntheticLiveCompletionEvents(
+            historyEvents: historyEvents,
+            reviewSubmissions: ascManager.reviewSubmissions,
+            submissionItemsBySubmissionId: ascManager.reviewSubmissionItemsBySubmissionId,
+            versions: versions
+        )
+
+        return (historyEvents + syntheticLiveEvents)
+            .sorted { sortDate($0.occurredAt) > sortDate($1.occurredAt) }
+            .compactMap(AppWallSyncEventPayload.init)
+    }
+
+    @MainActor
+    private static func syntheticLiveCompletionEvents(
+        historyEvents: [ASCSubmissionHistoryEvent],
+        reviewSubmissions: [ASCReviewSubmission],
+        submissionItemsBySubmissionId: [String: [ASCReviewSubmissionItem]],
+        versions: [ASCAppStoreVersion]
+    ) -> [ASCSubmissionHistoryEvent] {
+        let closedSubmissionIds = Set(
+            historyEvents.compactMap { event -> String? in
+                guard let submissionId = event.submissionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !submissionId.isEmpty else { return nil }
+                switch event.eventType {
+                case .accepted, .live, .rejected, .withdrawn, .removed, .submissionError:
+                    return submissionId
+                case .submitted, .inReview, .processing:
+                    return nil
+                }
+            }
+        )
+
+        return versions.compactMap { version in
+            guard ASCReleaseStatus.isLive(version.attributes.appStoreState) else { return nil }
+
+            let matchingSubmissions = reviewSubmissions
+                .filter { submission in
+                    submissionItemsBySubmissionId[submission.id]?
+                        .contains(where: { $0.appStoreVersionId == version.id }) == true
+                }
+                .sorted { lhs, rhs in
+                    sortDate(lhs.attributes.submittedDate) > sortDate(rhs.attributes.submittedDate)
+                }
+
+            guard let openSubmission = matchingSubmissions.first(where: { !closedSubmissionIds.contains($0.id) }) else {
+                return nil
+            }
+
+            let submittedAt = openSubmission.attributes.submittedDate?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !submittedAt.isEmpty else { return nil }
+
+            return ASCSubmissionHistoryEvent(
+                id: "synthetic-live:\(openSubmission.id)",
+                versionId: version.id,
+                versionString: version.attributes.versionString,
+                eventType: .live,
+                appleState: version.attributes.appStoreState,
+                occurredAt: submittedAt,
+                source: .reviewSubmission,
+                accuracy: .derived,
+                submissionId: openSubmission.id,
+                note: nil
+            )
+        }
+    }
+
+    private static func sortDate(_ iso: String?) -> Date {
+        guard let iso else { return .distantPast }
+        let formatterWithFractionalSeconds = ISO8601DateFormatter()
+        formatterWithFractionalSeconds.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let formatter = ISO8601DateFormatter()
+        return formatterWithFractionalSeconds.date(from: iso) ?? formatter.date(from: iso) ?? .distantPast
     }
 }

@@ -78,8 +78,7 @@ struct AllAppsView: View {
     private func handleConsentState() async {
         await loadApps()
         await loadSummary()
-        // Temporary: always present the consent sheet while iterating on the UI.
-        presentSyncSheet()
+        if !syncConsented && !syncPromptShown { presentSyncSheet() }
     }
 
     private func presentSyncSheet(forceStart: Bool = false) {
@@ -212,7 +211,6 @@ struct AllAppsView: View {
                 GridItem(.flexible()),
                 GridItem(.flexible()),
                 GridItem(.flexible()),
-                GridItem(.flexible()),
             ],
             spacing: 12
         ) {
@@ -223,26 +221,20 @@ struct AllAppsView: View {
                 icon: "square.grid.2x2.fill"
             )
             summaryCard(
-                title: "Live Apps",
-                value: summaryValue { "\($0.liveApps)" },
-                color: .green,
-                icon: "checkmark.seal.fill"
-            )
-            summaryCard(
                 title: "Avg Review Time",
                 value: summaryValue { formatReviewHours($0.avgReviewHours) },
                 color: .orange,
                 icon: "clock.fill"
             )
             summaryCard(
-                title: "Rejection Ratio",
-                value: summaryValue { formatPercent($0.rejectionRatio) },
+                title: "1st Rejection %",
+                value: summaryValue { formatPercent($0.firstSubmitRejectionRate) },
                 color: .red,
                 icon: "xmark.seal.fill"
             )
             summaryCard(
-                title: "Avg Rejections",
-                value: summaryValue { formatDecimal($0.avgRejectionsBeforeSuccess) },
+                title: "Avg Rejects until Live",
+                value: summaryValue { formatDecimal($0.avgRejectionsUntilFirstLive) },
                 color: .purple,
                 icon: "arrow.counterclockwise"
             )
@@ -258,6 +250,7 @@ struct AllAppsView: View {
                 Text(title)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             if isSummaryLoading && summary == nil {
                 ProgressView()

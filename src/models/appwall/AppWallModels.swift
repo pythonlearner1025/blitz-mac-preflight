@@ -111,6 +111,8 @@ struct AppWallSummary: Decodable, Sendable {
     let avgReviewHours: Double?
     let rejectionRatio: Double?
     let avgRejectionsBeforeSuccess: Double?
+    let firstSubmitRejectionRate: Double?
+    let avgRejectionsUntilFirstLive: Double?
 
     enum CodingKeys: String, CodingKey {
         case totalApps = "totalApps"
@@ -118,6 +120,8 @@ struct AppWallSummary: Decodable, Sendable {
         case avgReviewHours = "avgReviewHours"
         case rejectionRatio = "rejectionRatio"
         case avgRejectionsBeforeSuccess = "avgRejectionsBeforeSuccess"
+        case firstSubmitRejectionRate = "firstSubmitRejectionRate"
+        case avgRejectionsUntilFirstLive = "avgRejectionsUntilFirstLive"
     }
 }
 
