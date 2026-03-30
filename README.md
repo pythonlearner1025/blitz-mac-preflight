@@ -2,6 +2,7 @@
   <img src=".github/assets/logo.png" width="100" />
   <h1>Blitz</h1>
   <p>Native macOS App Store Connect tool with MCP. Submit iOS apps, manage IAPs, and automate App Store submission with AI agents.</p>
+  <p>MCPに対応したmacOSネイティブのApp Store Connectツール。iOSアプリの提出・IAP管理・App Store提出プロセスの自動化をAIエージェントで実現</p>
 
   [![Website](https://img.shields.io/badge/blitz.dev-website-black)](https://blitz.dev/)
   [![Discord](https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/wJQ6dA95S6)
