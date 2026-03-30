@@ -52,6 +52,10 @@ extension ASCManager {
         guard credentials != nil else { return }
         guard !loadedTabs.contains(tab) else { return }
         guard isLoadingTab[tab] != true else { return }
+        // Project switches can briefly leave tabs asking for data while the next
+        // app lookup is still in flight. Treat that as "not ready yet" instead
+        // of surfacing a false bundle-ID/app-not-found error.
+        guard !(app == nil && isLoadingApp) else { return }
 
         cancelBackgroundHydration(for: tab)
         isLoadingTab[tab] = true
@@ -65,6 +69,9 @@ extension ASCManager {
         } catch {
             isLoadingTab[tab] = false
             tabError[tab] = error.localizedDescription
+            await logDataFetchFailure("asc_tab_fetch_failed", error: error, metadata: [
+                "tab": tab.rawValue,
+            ])
         }
     }
 
@@ -81,6 +88,10 @@ extension ASCManager {
     func refreshTabData(_ tab: AppTab) async {
         guard let service else { return }
         guard credentials != nil else { return }
+        // Same guard as fetchTabData(_:): an in-flight app lookup should not be
+        // rendered as a tab error. The active tab will be re-requested once the
+        // project load finishes.
+        guard !(app == nil && isLoadingApp) else { return }
 
         let hadLoadedData = loadedTabs.contains(tab)
         cancelBackgroundHydration(for: tab)
@@ -99,6 +110,9 @@ extension ASCManager {
                 tabLoadedAt.removeValue(forKey: tab)
             }
             tabError[tab] = error.localizedDescription
+            await logDataFetchFailure("asc_tab_refresh_failed", error: error, metadata: [
+                "tab": tab.rawValue,
+            ])
         }
     }
 
@@ -174,7 +188,11 @@ extension ASCManager {
         }
 
         if let appInfoId {
-            async let ageRatingTask: ASCAgeRatingDeclaration? = try? service.fetchAgeRating(appInfoId: appInfoId)
+            async let ageRatingTask = fetchAgeRatingLogged(
+                service: service,
+                appInfoId: appInfoId,
+                context: "overview_secondary"
+            )
             async let appInfoLocalizationsTask: [ASCAppInfoLocalization]? = try? service.fetchAppInfoLocalizations(appInfoId: appInfoId)
 
             let fetchedAgeRating = await ageRatingTask
@@ -201,7 +219,11 @@ extension ASCManager {
         refreshSubmissionFeedbackIfNeeded()
 
         if monetizationStatus == nil {
-            let hasPricing = await service.fetchPricingConfigured(appId: appId)
+            let hasPricing = await fetchPricingConfiguredLogged(
+                service: service,
+                appId: appId,
+                context: "overview_secondary"
+            )
             guard !Task.isCancelled, isCurrentProject(projectId) else { return }
             monetizationStatus = hasPricing ? "Configured" : nil
         }
@@ -218,7 +240,11 @@ extension ASCManager {
         service: AppStoreConnectService
     ) async {
         if let appInfoId {
-            let fetchedAgeRating = try? await service.fetchAgeRating(appInfoId: appInfoId)
+            let fetchedAgeRating = await fetchAgeRatingLogged(
+                service: service,
+                appInfoId: appInfoId,
+                context: "review_secondary"
+            )
             guard !Task.isCancelled, isCurrentProject(projectId) else { return }
             ageRatingDeclaration = fetchedAgeRating
         } else {
@@ -261,7 +287,11 @@ extension ASCManager {
         }
 
         if currentAppPricePointId == nil && scheduledAppPricePointId == nil && monetizationStatus == nil {
-            let hasPricing = await service.fetchPricingConfigured(appId: appId)
+            let hasPricing = await fetchPricingConfiguredLogged(
+                service: service,
+                appId: appId,
+                context: "monetization_secondary"
+            )
             guard !Task.isCancelled, isCurrentProject(projectId) else { return }
             monetizationStatus = hasPricing ? "Configured" : nil
         }
@@ -311,16 +341,21 @@ extension ASCManager {
 
             let versions = try await versionsTask
             appStoreVersions = versions
+            syncSelectedVersion()
             finishOverviewReadinessLoading(Self.overviewVersionFieldLabels)
             appInfo = await appInfoTask
             finishOverviewReadinessLoading(Self.overviewAppInfoFieldLabels)
             builds = try await buildsTask
-            finishOverviewReadinessLoading(Self.overviewBuildFieldLabels)
 
             var primaryLocalization: OverviewPrimaryLocalization?
-            if let latestId = versions.first?.id {
-                async let localizationsTask = service.fetchLocalizations(versionId: latestId)
-                async let reviewDetailTask: ASCReviewDetail? = try? service.fetchReviewDetail(versionId: latestId)
+            if let selectedVersionId = selectedVersion?.id {
+                async let localizationsTask = service.fetchLocalizations(versionId: selectedVersionId)
+                async let reviewDetailTask = fetchReviewDetailLogged(
+                    service: service,
+                    versionId: selectedVersionId,
+                    context: "overview_primary"
+                )
+                async let selectedBuildTask: ASCBuild? = try? service.fetchBuildAttachedToVersion(versionId: selectedVersionId)
 
                 let fetchedLocalizations = try await localizationsTask
                 localizations = fetchedLocalizations
@@ -330,10 +365,14 @@ extension ASCManager {
                 finishOverviewReadinessLoading(Self.overviewLocalizationFieldLabels)
                 reviewDetail = await reviewDetailTask
                 finishOverviewReadinessLoading(Self.overviewReviewFieldLabels)
+                selectedVersionBuild = await selectedBuildTask
+                finishOverviewReadinessLoading(Self.overviewBuildFieldLabels)
             } else {
+                selectedVersionBuild = nil
                 finishOverviewReadinessLoading(
                     Self.overviewLocalizationFieldLabels
                         .union(Self.overviewReviewFieldLabels)
+                        .union(Self.overviewBuildFieldLabels)
                 )
             }
 
@@ -355,14 +394,16 @@ extension ASCManager {
             try await refreshStoreListingMetadata(
                 service: service,
                 appId: appId,
+                preferredVersionId: selectedVersionId,
                 preferredLocale: selectedStoreListingLocale
             )
 
         case .screenshots:
             let versions = try await service.fetchAppStoreVersions(appId: appId)
             appStoreVersions = versions
-            if let latestId = versions.first?.id {
-                let localizations = try await service.fetchLocalizations(versionId: latestId)
+            syncSelectedVersion()
+            if let selectedVersionId = selectedVersion?.id {
+                let localizations = try await service.fetchLocalizations(versionId: selectedVersionId)
                 self.localizations = localizations
                 let preferredLocale = selectedScreenshotsLocale
                 let targetLocalization = localizations.first(where: { $0.attributes.locale == preferredLocale })
@@ -387,6 +428,7 @@ extension ASCManager {
             async let appInfoTask: ASCAppInfo? = try? await service.fetchAppInfo(appId: appId)
 
             appStoreVersions = try await versionsTask
+            syncSelectedVersion()
             appInfo = await appInfoTask
 
         case .review:
@@ -396,10 +438,17 @@ extension ASCManager {
 
             let versions = try await versionsTask
             appStoreVersions = versions
-            if let latestId = versions.first?.id {
-                reviewDetail = try? await service.fetchReviewDetail(versionId: latestId)
+            syncSelectedVersion()
+            if let selectedVersionId = selectedVersion?.id {
+                reviewDetail = await fetchReviewDetailLogged(
+                    service: service,
+                    versionId: selectedVersionId,
+                    context: "review_tab_load"
+                )
+                selectedVersionBuild = try? await service.fetchBuildAttachedToVersion(versionId: selectedVersionId)
             } else {
                 reviewDetail = nil
+                selectedVersionBuild = nil
             }
             appInfo = await appInfoTask
             builds = try await buildsTask
@@ -416,13 +465,23 @@ extension ASCManager {
 
         case .monetization:
             async let pricePointsTask = service.fetchAppPricePoints(appId: appId)
-            async let pricingStateTask = (try? await service.fetchAppPricingState(appId: appId))
-                ?? ASCAppPricingState(currentPricePointId: nil, scheduledPricePointId: nil, scheduledEffectiveDate: nil)
+            async let pricingStateTask = fetchAppPricingStateLogged(
+                service: service,
+                appId: appId,
+                context: "monetization_tab_load"
+            )
             async let iapTask = service.fetchInAppPurchases(appId: appId)
             async let groupsTask = service.fetchSubscriptionGroups(appId: appId)
 
             appPricePoints = try await pricePointsTask
-            applyAppPricingState(await pricingStateTask)
+            applyAppPricingState(
+                await pricingStateTask
+                    ?? ASCAppPricingState(
+                        currentPricePointId: nil,
+                        scheduledPricePointId: nil,
+                        scheduledEffectiveDate: nil
+                    )
+            )
             inAppPurchases = try await iapTask
             let groups = try await groupsTask
             subscriptionGroups = groups

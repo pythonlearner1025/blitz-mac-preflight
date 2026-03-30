@@ -180,10 +180,10 @@ enum ASCReleaseStatus {
         }
     }
 
-    /// App Wall shows one compact state per app, so it should summarize the
-    /// version set the same way the dashboard does instead of copying the newest
-    /// version row verbatim. That keeps live apps live when a newer draft exists.
-    static func appWallCurrentState(for versions: [ASCAppStoreVersion]) -> String? {
+    /// App Wall shows one compact version summary per app, so it should use the
+    /// same "current" version that the dashboard summary logic would surface
+    /// instead of blindly taking the newest row.
+    static func appWallCurrentVersion(for versions: [ASCAppStoreVersion]) -> ASCAppStoreVersion? {
         let sortedVersions = sortedVersionsByRecency(versions)
         guard !sortedVersions.isEmpty else { return nil }
 
@@ -196,19 +196,27 @@ enum ASCReleaseStatus {
         }
 
         if let actionableIndex {
-            let actionableState = normalize(sortedVersions[actionableIndex].attributes.appStoreState)
             let actionableStateIsCurrent = liveIndex == nil || actionableIndex < liveIndex!
             if actionableStateIsCurrent {
-                return actionableState
+                return sortedVersions[actionableIndex]
             }
         }
 
         if let liveIndex {
-            return normalize(sortedVersions[liveIndex].attributes.appStoreState)
+            return sortedVersions[liveIndex]
         }
 
-        let newestState = normalize(sortedVersions[0].attributes.appStoreState)
-        return newestState.isEmpty ? nil : newestState
+        let newestVersion = sortedVersions[0]
+        let newestState = normalize(newestVersion.attributes.appStoreState)
+        return newestState.isEmpty ? nil : newestVersion
+    }
+
+    /// App Wall shows one compact state per app, so it should summarize the
+    /// version set the same way the dashboard does instead of copying the newest
+    /// version row verbatim. That keeps live apps live when a newer draft exists.
+    static func appWallCurrentState(for versions: [ASCAppStoreVersion]) -> String? {
+        normalize(appWallCurrentVersion(for: versions)?.attributes.appStoreState)
+            .nilIfEmpty
     }
 
     private static func compareDates(_ lhs: String?, _ rhs: String?) -> Int {
@@ -247,5 +255,11 @@ enum ASCReleaseStatus {
 
         let formatter = ISO8601DateFormatter()
         return formatter.date(from: trimmed)
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }

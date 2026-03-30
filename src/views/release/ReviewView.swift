@@ -102,8 +102,7 @@ struct ReviewView: View {
             if asc.app != nil {
                 ASCVersionPickerBar(
                     asc: asc,
-                    selection: selectedVersionBinding,
-                    onCreateUpdate: { asc.showCreateUpdateSheet = true }
+                    selection: selectedVersionBinding
                 ) {
                     ASCTabRefreshButton(asc: asc, tab: .review, helpText: "Refresh review data")
                 }

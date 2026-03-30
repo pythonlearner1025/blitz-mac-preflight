@@ -105,6 +105,32 @@ extension MCPExecutor {
         return (locale, false)
     }
 
+    private func activeVersionScopedTabForRefresh() async -> AppTab {
+        await MainActor.run {
+            switch appState.activeTab {
+            case .storeListing, .screenshots, .appDetails, .review:
+                return appState.activeTab
+            default:
+                return .app
+            }
+        }
+    }
+
+    private func versionPayload(_ version: ASCAppStoreVersion) -> [String: Any] {
+        var payload: [String: Any] = [
+            "id": version.id,
+            "versionString": version.attributes.versionString,
+            "state": version.attributes.appStoreState ?? "unknown",
+        ]
+        if let createdDate = version.attributes.createdDate {
+            payload["createdDate"] = createdDate
+        }
+        if let releaseType = version.attributes.releaseType {
+            payload["releaseType"] = releaseType
+        }
+        return payload
+    }
+
     func executeASCSetCredentials(_ args: [String: Any]) async -> [String: Any] {
         guard let issuerId = args["issuerId"] as? String,
               let keyId = args["keyId"] as? String,
@@ -313,6 +339,127 @@ extension MCPExecutor {
         return mcpJSON(state)
     }
 
+    func executeASCSelectVersion(_ args: [String: Any]) async throws -> [String: Any] {
+        guard let rawIdentifier = args["version"] as? String else {
+            throw MCPServerService.MCPError.invalidToolArgs
+        }
+
+        let identifier = rawIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !identifier.isEmpty else {
+            throw MCPServerService.MCPError.invalidToolArgs
+        }
+
+        await ASCUpdateLogger.shared.event("mcp_select_version_started", metadata: [
+            "version": identifier,
+        ])
+
+        await appState.ascManager.ensureTabData(.app)
+
+        var resolvedVersion = await MainActor.run {
+            appState.ascManager.version(matching: identifier)
+        }
+        if resolvedVersion == nil {
+            await appState.ascManager.refreshTabData(.app)
+            resolvedVersion = await MainActor.run {
+                appState.ascManager.version(matching: identifier)
+            }
+        }
+
+        guard let resolvedVersion else {
+            await ASCUpdateLogger.shared.event("mcp_select_version_failed", metadata: [
+                "reason": "not_found",
+                "version": identifier,
+            ])
+            return mcpText("Error: app version '\(identifier)' was not found.")
+        }
+
+        // Refresh only the currently relevant version-scoped tab so the UI and
+        // tab-state payloads stay aligned with the new version selection.
+        let refreshTab = await activeVersionScopedTabForRefresh()
+        await MainActor.run {
+            appState.ascManager.prepareForVersionSelection(resolvedVersion.id)
+        }
+        await appState.ascManager.refreshTabData(refreshTab)
+
+        await ASCUpdateLogger.shared.event("mcp_select_version_succeeded", metadata: [
+            "refreshedTab": refreshTab.rawValue,
+            "versionId": resolvedVersion.id,
+            "versionString": resolvedVersion.attributes.versionString,
+        ])
+
+        return mcpJSON([
+            "success": true,
+            "refreshedTab": refreshTab.rawValue,
+            "selectedVersion": versionPayload(resolvedVersion),
+        ])
+    }
+
+    func executeASCCreateVersion(_ args: [String: Any]) async throws -> [String: Any] {
+        guard let rawVersionString = args["versionString"] as? String else {
+            throw MCPServerService.MCPError.invalidToolArgs
+        }
+
+        let versionString = rawVersionString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !versionString.isEmpty else {
+            throw MCPServerService.MCPError.invalidToolArgs
+        }
+
+        let copyFromVersion = (args["copyFromVersion"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let attachBuildId = (args["attachBuildId"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let copyMetadata = args["copyMetadata"] as? Bool ?? true
+        let copyReviewDetail = args["copyReviewDetail"] as? Bool ?? true
+        let platform = await MainActor.run { appState.activeProject?.platform ?? .iOS }
+
+        await ASCUpdateLogger.shared.event("mcp_create_version_started", metadata: [
+            "attachBuildId": attachBuildId ?? "nil",
+            "copyFromVersion": copyFromVersion ?? "nil",
+            "copyMetadata": copyMetadata ? "true" : "false",
+            "copyReviewDetail": copyReviewDetail ? "true" : "false",
+            "versionString": versionString,
+        ])
+
+        await appState.ascManager.createUpdateVersion(
+            versionString: versionString,
+            platform: platform,
+            copyFromVersionId: copyFromVersion?.isEmpty == false ? copyFromVersion : nil,
+            copyMetadata: copyMetadata,
+            copyReviewDetail: copyReviewDetail,
+            attachBuildId: attachBuildId?.isEmpty == false ? attachBuildId : nil
+        )
+
+        if let error = await MainActor.run(body: { appState.ascManager.versionCreationError }) {
+            await ASCUpdateLogger.shared.event("mcp_create_version_failed", metadata: [
+                "error": error,
+                "versionString": versionString,
+            ])
+            return mcpText("Error: \(error)")
+        }
+
+        guard let createdVersion = await MainActor.run(body: {
+            appState.ascManager.version(matching: versionString)
+        }) else {
+            await ASCUpdateLogger.shared.event("mcp_create_version_failed", metadata: [
+                "reason": "version_missing_after_create",
+                "versionString": versionString,
+            ])
+            return mcpText("Error: version creation did not complete.")
+        }
+
+        let canCreateUpdate = await MainActor.run(body: { appState.ascManager.canCreateUpdate })
+        await ASCUpdateLogger.shared.event("mcp_create_version_succeeded", metadata: [
+            "versionId": createdVersion.id,
+            "versionString": createdVersion.attributes.versionString,
+        ])
+
+        return mcpJSON([
+            "success": true,
+            "selectedVersion": versionPayload(createdVersion),
+            "canCreateUpdate": canCreateUpdate,
+        ])
+    }
+
     func executeScreenshotsAddAsset(_ args: [String: Any]) async throws -> [String: Any] {
         guard let sourcePath = args["sourcePath"] as? String else {
             throw MCPServerService.MCPError.invalidToolArgs
@@ -513,9 +660,36 @@ extension MCPExecutor {
     }
 
     func executeASCOpenSubmitPreview() async -> [String: Any] {
+        let needsVersionCreation = await MainActor.run {
+            let asc = appState.ascManager
+            return asc.canCreateUpdate || (asc.currentUpdateVersion == nil && asc.editableVersion == nil)
+        }
+        if needsVersionCreation {
+            await ASCUpdateLogger.shared.event("mcp_open_submit_preview_blocked", metadata: [
+                "reason": "missing_app_store_version",
+            ])
+            return mcpJSON([
+                "ready": false,
+                "missing": ["App Store Version"],
+                "canCreateUpdate": true,
+            ])
+        }
+
         await appState.ascManager.refreshSubmissionReadinessData()
 
         var readiness = await MainActor.run { appState.ascManager.submissionReadiness }
+        let hasLockedUpdateOnly = await MainActor.run {
+            let asc = appState.ascManager
+            return asc.editableVersion == nil && asc.currentUpdateVersion != nil
+        }
+        if hasLockedUpdateOnly {
+            await MainActor.run {
+                appState.ascManager.showSubmitPreview = true
+            }
+            await ASCUpdateLogger.shared.event("mcp_open_submit_preview_status_only", metadata: [:])
+            return mcpJSON(["ready": true, "opened": true, "statusOnly": true])
+        }
+
         let buildMissing = readiness.missingRequired.contains { $0.label == "Build" }
         if buildMissing {
             let service = await MainActor.run { appState.ascManager.service }
@@ -523,14 +697,35 @@ extension MCPExecutor {
             if let service, let appId,
                let latestBuild = try? await service.fetchLatestBuild(appId: appId),
                latestBuild.attributes.processingState == "VALID" {
-                let versionId = await MainActor.run { appState.ascManager.pendingVersionId }
+                let versionId = await MainActor.run { () -> String? in
+                    let asc = appState.ascManager
+                    if let selectedVersion = asc.selectedVersion,
+                       ASCReleaseStatus.isEditable(selectedVersion.attributes.appStoreState) {
+                        return selectedVersion.id
+                    }
+                    return asc.editableVersion?.id
+                }
                 if let versionId {
                     do {
                         try await service.attachBuild(versionId: versionId, buildId: latestBuild.id)
+                        await MainActor.run {
+                            if appState.ascManager.selectedVersion?.id == versionId {
+                                appState.ascManager.selectedVersionBuild = latestBuild
+                            }
+                        }
                         await appState.ascManager.refreshTabData(.app)
                         readiness = await MainActor.run { appState.ascManager.submissionReadiness }
+                        await ASCUpdateLogger.shared.event("mcp_open_submit_preview_auto_attached_build", metadata: [
+                            "buildId": latestBuild.id,
+                            "versionId": versionId,
+                        ])
                     } catch {
                         // Non-fatal: readiness will still surface the missing build.
+                        await ASCUpdateLogger.shared.event("mcp_open_submit_preview_auto_attach_failed", metadata: [
+                            "buildId": latestBuild.id,
+                            "error": error.localizedDescription,
+                            "versionId": versionId,
+                        ])
                     }
                 }
             }
@@ -538,12 +733,16 @@ extension MCPExecutor {
 
         if !readiness.isComplete {
             let missing = readiness.missingRequired.map { $0.label }
+            await ASCUpdateLogger.shared.event("mcp_open_submit_preview_incomplete", metadata: [
+                "missing": missing.joined(separator: ","),
+            ])
             return mcpJSON(["ready": false, "missing": missing])
         }
 
         await MainActor.run {
             appState.ascManager.showSubmitPreview = true
         }
+        await ASCUpdateLogger.shared.event("mcp_open_submit_preview_opened", metadata: [:])
 
         return mcpJSON(["ready": true, "opened": true])
     }

@@ -55,9 +55,36 @@ extension ASCManager {
         return primaryAppInfoLocalization()
     }
 
+    /// Release notes are only mandatory when the selected version is an update
+    /// on top of an already-live App Store version.
+    var selectedVersionRequiresWhatsNew: Bool {
+        guard let selectedVersion, let liveVersion else { return false }
+        guard selectedVersion.id != liveVersion.id else { return false }
+        return ASCReleaseStatus.isCurrentUpdateCandidate(selectedVersion.attributes.appStoreState)
+    }
+
+    /// App Store Connect validates `What's New` per version localization, so the
+    /// readiness model has to look at every localization on the selected update.
+    func selectedVersionLocalizationsMissingWhatsNew(
+        in candidates: [ASCVersionLocalization]? = nil
+    ) -> [ASCVersionLocalization] {
+        guard selectedVersionRequiresWhatsNew else { return [] }
+        let candidates = candidates ?? localizations
+        return candidates
+            .filter { localization in
+                localization.attributes.whatsNew?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .isEmpty ?? true
+            }
+            .sorted { lhs, rhs in
+                lhs.attributes.locale.localizedCompare(rhs.attributes.locale) == .orderedAscending
+            }
+    }
+
     func refreshStoreListingMetadata(
         service: AppStoreConnectService,
         appId: String,
+        preferredVersionId: String? = nil,
         preferredLocale: String? = nil
     ) async throws {
         async let versionsTask = service.fetchAppStoreVersions(appId: appId)
@@ -68,10 +95,11 @@ extension ASCManager {
 
         appStoreVersions = versions
         appInfo = fetchedAppInfo
+        let resolvedVersionId = syncSelectedVersion(preferredVersionId: preferredVersionId)
 
         let versionLocalizations: [ASCVersionLocalization]
-        if let latestId = versions.first?.id {
-            versionLocalizations = try await service.fetchLocalizations(versionId: latestId)
+        if let resolvedVersionId {
+            versionLocalizations = try await service.fetchLocalizations(versionId: resolvedVersionId)
         } else {
             versionLocalizations = []
         }
@@ -157,6 +185,7 @@ extension ASCManager {
             try await refreshStoreListingMetadata(
                 service: service,
                 appId: appId,
+                preferredVersionId: selectedVersion?.id,
                 preferredLocale: trimmedLocale
             )
         } catch {

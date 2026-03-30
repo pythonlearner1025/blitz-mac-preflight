@@ -88,8 +88,7 @@ struct StoreListingView: View {
             if asc.app != nil {
                 ASCVersionPickerBar(
                     asc: asc,
-                    selection: selectedVersionBinding,
-                    onCreateUpdate: { asc.showCreateUpdateSheet = true }
+                    selection: selectedVersionBinding
                 ) {
                     if !locales.isEmpty {
                         Picker("Locale", selection: selectedLocaleBinding) {

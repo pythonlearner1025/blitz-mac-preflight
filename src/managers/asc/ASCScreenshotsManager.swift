@@ -8,8 +8,13 @@ import ImageIO
 extension ASCManager {
     // MARK: - Screenshot Data
 
-    func screenshotTrackKey(displayType: String, locale: String) -> String {
-        "\(locale)::\(displayType)"
+    func screenshotCacheKey(versionId: String? = nil, locale: String) -> String {
+        let resolvedVersionId = versionId ?? selectedVersion?.id ?? "current"
+        return "\(resolvedVersionId)::\(locale)"
+    }
+
+    func screenshotTrackKey(displayType: String, locale: String, versionId: String? = nil) -> String {
+        "\(screenshotCacheKey(versionId: versionId, locale: locale))::\(displayType)"
     }
 
     func hasTrackState(displayType: String, locale: String = "en-US") -> Bool {
@@ -28,10 +33,11 @@ extension ASCManager {
 
     func loadScreenshots(locale: String, force: Bool = false) async {
         guard let service else { return }
+        let cacheKey = screenshotCacheKey(locale: locale)
 
         if !force,
-           screenshotSetsByLocale[locale] != nil,
-           screenshotsByLocale[locale] != nil {
+           screenshotSetsByLocale[cacheKey] != nil,
+           screenshotsByLocale[cacheKey] != nil {
             return
         }
 
@@ -53,11 +59,11 @@ extension ASCManager {
     }
 
     func screenshotSetsForLocale(_ locale: String) -> [ASCScreenshotSet] {
-        screenshotSetsByLocale[locale] ?? []
+        screenshotSetsByLocale[screenshotCacheKey(locale: locale)] ?? []
     }
 
     func screenshotsForLocale(_ locale: String) -> [String: [ASCScreenshot]] {
-        screenshotsByLocale[locale] ?? [:]
+        screenshotsByLocale[screenshotCacheKey(locale: locale)] ?? [:]
     }
 
     func updateScreenshotCache(
@@ -65,25 +71,27 @@ extension ASCManager {
         sets: [ASCScreenshotSet],
         screenshots: [String: [ASCScreenshot]]
     ) {
-        screenshotSetsByLocale[locale] = sets
-        screenshotsByLocale[locale] = screenshots
+        let cacheKey = screenshotCacheKey(locale: locale)
+        screenshotSetsByLocale[cacheKey] = sets
+        screenshotsByLocale[cacheKey] = screenshots
         for displayType in trackDisplayTypes(for: locale) {
             loadTrackFromASC(displayType: displayType, locale: locale)
         }
     }
 
     private func trackDisplayTypes(for locale: String) -> Set<String> {
+        let cacheKey = screenshotCacheKey(locale: locale)
         var displayTypes = Set(screenshotSetsForLocale(locale).map(\.attributes.screenshotDisplayType))
         for key in Set(trackSlots.keys).union(savedTrackState.keys) {
-            if let displayType = displayType(fromTrackKey: key, locale: locale) {
+            if let displayType = displayType(fromTrackKey: key, cacheKey: cacheKey) {
                 displayTypes.insert(displayType)
             }
         }
         return displayTypes
     }
 
-    private func displayType(fromTrackKey key: String, locale: String) -> String? {
-        let prefix = "\(locale)::"
+    private func displayType(fromTrackKey key: String, cacheKey: String) -> String? {
+        let prefix = "\(cacheKey)::"
         guard key.hasPrefix(prefix) else { return nil }
         return String(key.dropFirst(prefix.count))
     }
@@ -178,13 +186,13 @@ extension ASCManager {
     }
 
     private func ensureScreenshotLocalizationsLoaded(service: AppStoreConnectService) async {
-        if localizations.isEmpty, let versionId = appStoreVersions.first?.id {
+        if localizations.isEmpty, let versionId = selectedVersion?.id ?? syncSelectedVersion() {
             localizations = (try? await service.fetchLocalizations(versionId: versionId)) ?? []
         }
         if localizations.isEmpty, let appId = app?.id {
             let versions = (try? await service.fetchAppStoreVersions(appId: appId)) ?? []
             appStoreVersions = versions
-            if let versionId = versions.first?.id {
+            if let versionId = syncSelectedVersion() {
                 localizations = (try? await service.fetchLocalizations(versionId: versionId)) ?? []
             }
         }

@@ -3,6 +3,23 @@ import Foundation
 extension MCPExecutor {
     // MARK: - Tab State Tool
 
+    @MainActor
+    func versionStatePayload(_ version: ASCAppStoreVersion?) -> [String: Any]? {
+        guard let version else { return nil }
+        var payload: [String: Any] = [
+            "id": version.id,
+            "versionString": version.attributes.versionString,
+            "state": version.attributes.appStoreState ?? "unknown",
+        ]
+        if let createdDate = version.attributes.createdDate {
+            payload["createdDate"] = createdDate
+        }
+        if let releaseType = version.attributes.releaseType {
+            payload["releaseType"] = releaseType
+        }
+        return payload
+    }
+
     func executeGetTabState(_ args: [String: Any]) async throws -> [String: Any] {
         let tabStr = args["tab"] as? String
         let tab: AppTab
@@ -103,13 +120,35 @@ extension MCPExecutor {
                 "missingRequired": readiness.missingRequired.map { $0.label }
             ],
             "totalVersions": asc.appStoreVersions.count,
-            "isSubmitting": asc.isSubmitting
+            "isSubmitting": asc.isSubmitting,
+            "canCreateUpdate": asc.canCreateUpdate,
+            "selectedVersionIsEditable": asc.selectedVersionIsEditable,
         ]
         if let version = asc.appStoreVersions.first {
             result["latestVersion"] = [
                 "id": version.id,
                 "versionString": version.attributes.versionString,
                 "state": version.attributes.appStoreState ?? "unknown"
+            ]
+        }
+        if let selectedVersion = versionStatePayload(asc.selectedVersion) {
+            result["selectedVersion"] = selectedVersion
+        }
+        if let liveVersion = versionStatePayload(asc.liveVersion) {
+            result["liveVersion"] = liveVersion
+        }
+        if let currentUpdateVersion = versionStatePayload(asc.currentUpdateVersion) {
+            result["currentUpdateVersion"] = currentUpdateVersion
+        }
+        if let editableVersion = versionStatePayload(asc.editableVersion) {
+            result["editableVersion"] = editableVersion
+        }
+        if let selectedBuild = asc.selectedVersionBuild {
+            result["selectedVersionBuild"] = [
+                "id": selectedBuild.id,
+                "version": selectedBuild.attributes.version,
+                "processingState": selectedBuild.attributes.processingState ?? "unknown",
+                "uploadedDate": selectedBuild.attributes.uploadedDate ?? "",
             ]
         }
         if let error = asc.submissionError {
@@ -144,14 +183,19 @@ extension MCPExecutor {
             "whatsNew": localization?.attributes.whatsNew ?? ""
         ]
 
-        return [
+        var result: [String: Any] = [
             "selectedLocale": selectedLocale,
             "availableLocales": asc.localizations.map(\.attributes.locale),
             "localization": localizationState,
             "privacyPolicyUrl": infoLoc?.attributes.privacyPolicyUrl ?? "",
             "hasAppInfoLocalization": infoLoc != nil,
-            "localeCount": asc.localizations.count
+            "localeCount": asc.localizations.count,
+            "canCreateUpdate": asc.canCreateUpdate,
         ]
+        if let selectedVersion = versionStatePayload(asc.selectedVersion) {
+            result["selectedVersion"] = selectedVersion
+        }
+        return result
     }
 
     @MainActor
@@ -161,13 +205,17 @@ extension MCPExecutor {
                 "primaryCategory": asc.appInfo?.primaryCategoryId ?? "",
                 "contentRightsDeclaration": asc.app?.contentRightsDeclaration ?? ""
             ],
-            "versionCount": asc.appStoreVersions.count
+            "versionCount": asc.appStoreVersions.count,
+            "canCreateUpdate": asc.canCreateUpdate,
         ]
         if let version = asc.appStoreVersions.first {
             result["latestVersion"] = [
                 "versionString": version.attributes.versionString,
                 "state": version.attributes.appStoreState ?? "unknown"
             ]
+        }
+        if let selectedVersion = versionStatePayload(asc.selectedVersion) {
+            result["selectedVersion"] = selectedVersion
         }
         return result
     }
@@ -226,6 +274,18 @@ extension MCPExecutor {
                 "uploadedDate": build.attributes.uploadedDate ?? ""
             ]
         }
+        result["canCreateUpdate"] = asc.canCreateUpdate
+        if let selectedVersion = versionStatePayload(asc.selectedVersion) {
+            result["selectedVersion"] = selectedVersion
+        }
+        if let selectedBuild = asc.selectedVersionBuild {
+            result["selectedVersionBuild"] = [
+                "id": selectedBuild.id,
+                "version": selectedBuild.attributes.version,
+                "processingState": selectedBuild.attributes.processingState ?? "unknown",
+                "uploadedDate": selectedBuild.attributes.uploadedDate ?? "",
+            ]
+        }
         return result
     }
 
@@ -244,12 +304,17 @@ extension MCPExecutor {
             }
             return value
         }
-        return [
+        var result: [String: Any] = [
             "selectedLocale": selectedLocale,
             "availableLocales": asc.localizations.map(\.attributes.locale),
             "screenshotSets": sets,
-            "localeCount": asc.localizations.count
+            "localeCount": asc.localizations.count,
+            "canCreateUpdate": asc.canCreateUpdate,
         ]
+        if let selectedVersion = versionStatePayload(asc.selectedVersion) {
+            result["selectedVersion"] = selectedVersion
+        }
+        return result
     }
 
     @MainActor

@@ -43,8 +43,7 @@ struct MonetizationView: View {
             if asc.app != nil {
                 ASCVersionPickerBar(
                     asc: asc,
-                    selection: selectedVersionBinding,
-                    onCreateUpdate: { asc.showCreateUpdateSheet = true }
+                    selection: selectedVersionBinding
                 ) {
                     ASCTabRefreshButton(asc: asc, tab: .monetization, helpText: "Refresh monetization data")
                 }

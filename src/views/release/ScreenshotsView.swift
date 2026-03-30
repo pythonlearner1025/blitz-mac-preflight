@@ -136,8 +136,7 @@ struct ScreenshotsView: View {
                     if asc.app != nil {
                         ASCVersionPickerBar(
                             asc: asc,
-                            selection: selectedVersionBinding,
-                            onCreateUpdate: { asc.showCreateUpdateSheet = true }
+                            selection: selectedVersionBinding
                         ) {
                             if !asc.localizations.isEmpty {
                                 Picker("Locale", selection: selectedLocaleBinding) {

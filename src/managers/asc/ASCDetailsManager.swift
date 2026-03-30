@@ -15,12 +15,13 @@ extension ASCManager {
         // - contentRightsDeclaration → apps (PATCH /v1/apps/{id})
         // - primaryCategory, subcategories → appInfos relationships (PATCH /v1/appInfos/{id})
         if field == "copyright" {
-            guard let versionId = appStoreVersions.first?.id else { return }
+            guard let versionId = selectedVersion?.id else { return }
             do {
                 try await service.patchVersion(id: versionId, fields: [field: value])
                 // Re-fetch versions so submissionReadiness picks up the new copyright
                 if let appId = app?.id {
                     appStoreVersions = try await service.fetchAppStoreVersions(appId: appId)
+                    syncSelectedVersion(preferredVersionId: versionId)
                 }
             } catch {
                 writeError = error.localizedDescription
@@ -72,7 +73,11 @@ extension ASCManager {
         do {
             try await service.patchAgeRating(id: id, attributes: attributes)
             if let infoId = appInfo?.id {
-                ageRatingDeclaration = try? await service.fetchAgeRating(appInfoId: infoId)
+                ageRatingDeclaration = await fetchAgeRatingLogged(
+                    service: service,
+                    appInfoId: infoId,
+                    context: "age_rating_update"
+                )
             }
         } catch {
             writeError = error.localizedDescription

@@ -5,6 +5,8 @@ import Foundation
 final class ASCManager {
     nonisolated init() {}
 
+    weak var appState: AppState?
+
     // Credentials & service
     var credentials: ASCCredentials?
     var service: AppStoreConnectService?
@@ -55,13 +57,18 @@ final class ASCManager {
     var appInfoLocalization: ASCAppInfoLocalization?
     var ageRatingDeclaration: ASCAgeRatingDeclaration?
     var reviewDetail: ASCReviewDetail?
+    var selectedVersionId: String?
+    var selectedVersionBuild: ASCBuild?
     var pendingCredentialValues: [String: String]?  // Pre-fill values for ASC credential form (from MCP)
     var pendingFormValues: [String: [String: String]] = [:]  // tab -> field -> value (for MCP pre-fill)
     var pendingFormVersion: Int = 0  // Incremented when pendingFormValues changes; views watch this
     var pendingCreateValues: [String: String]?  // Pre-fill values for IAP/subscription create forms (from MCP)
     var showSubmitPreview = false
+    var showCreateUpdateSheet = false
     var isSubmitting = false
+    var isCreatingVersion = false
     var submissionError: String?
+    var versionCreationError: String?
     var writeError: String?  // Inline error for write operations (does not replace tab content)
 
     // Review submission history (for rejection tracking)
@@ -123,11 +130,13 @@ final class ASCManager {
     var loadedProjectId: String?
 
     // Submission readiness labels used by both the view model and background hydration.
+    static let overviewWhatsNewFieldLabel = "What's New"
     static let overviewLocalizationFieldLabels: Set<String> = [
         "App Name",
         "Description",
         "Keywords",
-        "Support URL"
+        "Support URL",
+        overviewWhatsNewFieldLabel
     ]
     static let overviewVersionFieldLabels: Set<String> = ["Copyright"]
     static let overviewAppInfoFieldLabels: Set<String> = ["Primary Category"]

@@ -67,7 +67,7 @@ actor MCPExecutor {
 
         // Pre-navigate for ASC form tools so the user sees the target tab before approving.
         var previousNavigation: NavigationState?
-        if name == "asc_fill_form" || name == "asc_open_submit_preview"
+        if name == "asc_fill_form" || name == "asc_create_version" || name == "asc_open_submit_preview"
             || name == "store_listing_switch_localization"
             || name == "asc_create_iap" || name == "asc_create_subscription" || name == "asc_set_app_price"
             || name == "screenshots_switch_localization"
@@ -129,7 +129,7 @@ actor MCPExecutor {
         } else if name == "store_listing_switch_localization" {
             targetTab = .storeListing
             targetAppSubTab = nil
-        } else if name == "asc_open_submit_preview" {
+        } else if name == "asc_create_version" || name == "asc_open_submit_preview" {
             targetTab = .app
             targetAppSubTab = .overview
         } else if name == "screenshots_switch_localization"
@@ -264,6 +264,10 @@ actor MCPExecutor {
             return try await executeASCFillForm(arguments)
         case "store_listing_switch_localization":
             return try await executeStoreListingSwitchLocalization(arguments)
+        case "asc_select_version":
+            return try await executeASCSelectVersion(arguments)
+        case "asc_create_version":
+            return try await executeASCCreateVersion(arguments)
         case "screenshots_switch_localization":
             return try await executeScreenshotsSwitchLocalization(arguments)
         case "screenshots_add_asset":

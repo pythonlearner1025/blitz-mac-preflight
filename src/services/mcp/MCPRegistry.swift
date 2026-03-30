@@ -254,6 +254,28 @@ enum MCPRegistry {
         ))
 
         tools.append(tool(
+            name: "asc_select_version",
+            description: "Select an App Store version in Blitz by version ID or version string, then refresh the active release tab or overview.",
+            properties: [
+                "version": ["type": "string", "description": "Version ID or version string (for example \"1.2.3\")"]
+            ],
+            required: ["version"]
+        ))
+
+        tools.append(tool(
+            name: "asc_create_version",
+            description: "Create a new App Store software update version for the current app. Optionally copy metadata or review contact details from another version and attach a build immediately.",
+            properties: [
+                "versionString": ["type": "string", "description": "New App Store version string (for example \"1.2.4\")"],
+                "copyFromVersion": ["type": "string", "description": "Optional source version ID or version string to copy from"],
+                "copyMetadata": ["type": "boolean", "description": "Copy store listing metadata from the source version. Defaults to true."],
+                "copyReviewDetail": ["type": "boolean", "description": "Copy review contact details from the source version. Defaults to true."],
+                "attachBuildId": ["type": "string", "description": "Optional build ID to attach to the new version immediately"]
+            ],
+            required: ["versionString"]
+        ))
+
+        tools.append(tool(
             name: "asc_open_submit_preview",
             description: "Check submission readiness and open the Submit for Review modal. Returns list of missing required fields if incomplete.",
             properties: [:],
@@ -374,6 +396,10 @@ enum MCPRegistry {
             return .ascFormMutation
         case "store_listing_switch_localization":
             return .ascFormMutation
+        case "asc_select_version":
+            return .query
+        case "asc_create_version":
+            return .ascSubmitMutation
         case "screenshots_switch_localization", "screenshots_add_asset", "screenshots_set_track", "screenshots_save":
             return .ascScreenshotMutation
         case "asc_open_submit_preview":
