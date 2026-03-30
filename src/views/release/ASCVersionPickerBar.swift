@@ -56,6 +56,8 @@ struct ASCVersionPickerBar<Content: View>: View {
 
         return Text(normalizedState.replacingOccurrences(of: "_", with: " ").capitalized)
             .font(.caption.weight(.medium))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(color.opacity(0.12))

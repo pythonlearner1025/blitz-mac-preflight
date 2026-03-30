@@ -30,7 +30,10 @@ actor MCPExecutor {
     }
 
     let appState: AppState
-    private var pendingContinuations: [String: CheckedContinuation<Bool, Never>] = [:]
+    private static let gateableCategories: [ApprovalRequest.ToolCategory] = [
+        .ascFormMutation, .ascScreenshotMutation, .ascSubmitMutation,
+        .buildPipeline, .projectMutation, .settingsMutation, .simulatorControl,
+    ]
 
     init(appState: AppState) {
         self.appState = appState
@@ -178,42 +181,47 @@ actor MCPExecutor {
         return previousNavigation
     }
 
-    /// Resume a pending approval.
-    nonisolated func resolveApproval(id: String, approved: Bool) {
-        Task { await _resolveApproval(id: id, approved: approved) }
-    }
-
-    private func _resolveApproval(id: String, approved: Bool) {
-        guard let continuation = pendingContinuations.removeValue(forKey: id) else { return }
-        continuation.resume(returning: approved)
-    }
-
     // MARK: - Approval Flow
 
     private func requestApproval(_ request: ApprovalRequest) async -> Bool {
-        await MainActor.run {
-            appState.pendingApproval = request
-            appState.showApprovalAlert = true
+        let result = await MainActor.run { () -> (approved: Bool, approveAll: Bool) in
             NSApp.activate(ignoringOtherApps: true)
+
+            let alert = NSAlert()
+            alert.messageText = "AI Tool Request"
+            alert.informativeText = request.description
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "Approve")
+            alert.addButton(withTitle: "Deny")
+
+            let checkbox = NSButton(checkboxWithTitle: "Approve all in the future", target: nil, action: nil)
+            checkbox.state = .off
+            alert.accessoryView = checkbox
+
+            // Auto-deny after 5 minutes
+            let timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: false) { _ in
+                NSApp.abortModal()
+            }
+
+            let response = alert.runModal()
+            timer.invalidate()
+
+            if response == .abort {
+                return (false, false)
+            }
+            return (response == .alertFirstButtonReturn, checkbox.state == .on)
         }
 
-        let approved = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            pendingContinuations[request.id] = continuation
-
-            Task {
-                try? await Task.sleep(for: .seconds(300))
-                if pendingContinuations[request.id] != nil {
-                    _resolveApproval(id: request.id, approved: false)
+        if result.approved && result.approveAll {
+            await MainActor.run {
+                for category in Self.gateableCategories {
+                    SettingsService.shared.permissionToggles[category.rawValue] = true
                 }
+                SettingsService.shared.save()
             }
         }
 
-        await MainActor.run {
-            appState.pendingApproval = nil
-            appState.showApprovalAlert = false
-        }
-
-        return approved
+        return result.approved
     }
 
     // MARK: - Tool Dispatch
