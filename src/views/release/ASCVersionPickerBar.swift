@@ -21,9 +21,6 @@ struct ASCVersionPickerBar<Content: View>: View {
 
             if let selectedVersion = asc.selectedVersion {
                 stateBadge(selectedVersion.attributes.appStoreState ?? "")
-                Text("Target \(selectedVersion.attributes.versionString)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             content
