@@ -55,33 +55,73 @@ extension ASCManager {
     }
 
     func refreshReviewSubmissionData(appId: String, service: AppStoreConnectService) async {
-        let submissions = ((try? await service.fetchReviewSubmissions(appId: appId)) ?? []).filter {
-            !trimmed($0.attributes.submittedDate).isEmpty
+        await ASCUpdateLogger.shared.event("review_submission_refresh_started", metadata: [
+            "appId": appId,
+        ])
+
+        let submissions: [ASCReviewSubmission]
+        do {
+            submissions = try await service.fetchReviewSubmissions(appId: appId).filter {
+                !trimmed($0.attributes.submittedDate).isEmpty
+            }
+        } catch {
+            reviewSubmissions = []
+            reviewSubmissionItemsBySubmissionId = [:]
+            latestSubmissionItems = []
+            await logDataFetchFailure("review_submission_refresh_failed", error: error, metadata: [
+                "appId": appId,
+            ])
+            return
         }
         reviewSubmissions = submissions
 
         guard !submissions.isEmpty else {
             reviewSubmissionItemsBySubmissionId = [:]
             latestSubmissionItems = []
+            await ASCUpdateLogger.shared.event("review_submission_refresh_succeeded", metadata: [
+                "appId": appId,
+                "submissionCount": "0",
+            ])
             return
         }
 
         var itemsBySubmissionId: [String: [ASCReviewSubmissionItem]] = [:]
-        await withTaskGroup(of: (String, [ASCReviewSubmissionItem]).self) { group in
+        var itemFailures: [String] = []
+        await withTaskGroup(of: (String, [ASCReviewSubmissionItem], String?).self) { group in
             for submission in submissions {
                 group.addTask {
-                    let items = (try? await service.fetchReviewSubmissionItems(submissionId: submission.id)) ?? []
-                    return (submission.id, items)
+                    do {
+                        let items = try await service.fetchReviewSubmissionItems(submissionId: submission.id)
+                        return (submission.id, items, nil)
+                    } catch {
+                        return (submission.id, [], error.localizedDescription)
+                    }
                 }
             }
 
-            for await (submissionId, items) in group {
+            for await (submissionId, items, failure) in group {
                 itemsBySubmissionId[submissionId] = items
+                if let failure {
+                    itemFailures.append("\(submissionId): \(failure)")
+                }
             }
         }
 
         reviewSubmissionItemsBySubmissionId = itemsBySubmissionId
         latestSubmissionItems = itemsBySubmissionId[submissions.first?.id ?? ""] ?? []
+        await ASCUpdateLogger.shared.event("review_submission_refresh_succeeded", metadata: [
+            "appId": appId,
+            "itemFailureCount": String(itemFailures.count),
+            "submissionCount": String(submissions.count),
+        ])
+        if !itemFailures.isEmpty {
+            await ASCUpdateLogger.shared.snapshot(
+                label: "review_submission_items_partial_failure",
+                body: itemFailures.joined(separator: "\n")
+                    + "\n\n"
+                    + diagnosticSnapshot(reason: "review_submission_items_partial_failure")
+            )
+        }
     }
 
     private func historyDate(_ iso: String?) -> Date {
