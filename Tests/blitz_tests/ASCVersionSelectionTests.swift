@@ -34,6 +34,60 @@ import Testing
 }
 
 @MainActor
+@Test func historicalRejectedVersionDoesNotOverrideNewerLiveVersion() {
+    let manager = ASCManager()
+    manager.appStoreVersions = [
+        makeVersion(id: "live", versionString: "2.0", state: "READY_FOR_SALE", createdDate: "2026-03-20T00:00:00Z"),
+        makeVersion(id: "rejected", versionString: "1.9", state: "REJECTED", createdDate: "2026-03-01T00:00:00Z"),
+    ]
+
+    let selectedVersionId = manager.syncSelectedVersion()
+
+    #expect(selectedVersionId == "live")
+    #expect(manager.selectedVersion?.id == "live")
+    #expect(manager.currentUpdateVersion == nil)
+    #expect(manager.pendingVersionId == nil)
+    #expect(manager.canCreateUpdate)
+}
+
+@MainActor
+@Test func historicalRejectedVersionDoesNotOverrideCurrentInFlightUpdate() {
+    let manager = ASCManager()
+    manager.appStoreVersions = [
+        makeVersion(id: "review", versionString: "2.1", state: "IN_REVIEW", createdDate: "2026-03-21T00:00:00Z"),
+        makeVersion(id: "live", versionString: "2.0", state: "READY_FOR_SALE", createdDate: "2026-03-20T00:00:00Z"),
+        makeVersion(id: "rejected", versionString: "1.9", state: "REJECTED", createdDate: "2026-03-01T00:00:00Z"),
+    ]
+
+    let selectedVersionId = manager.syncSelectedVersion()
+
+    #expect(selectedVersionId == "review")
+    #expect(manager.selectedVersion?.id == "review")
+    #expect(manager.currentUpdateVersion?.id == "review")
+    #expect(manager.editableVersion == nil)
+    #expect(!manager.canCreateUpdate)
+    #expect(manager.newVersionCreationBlocker?.id == "review")
+}
+
+@MainActor
+@Test func currentRejectedUpdateStillBlocksWhenNewerThanLiveVersion() {
+    let manager = ASCManager()
+    manager.appStoreVersions = [
+        makeVersion(id: "rejected", versionString: "2.1", state: "REJECTED", createdDate: "2026-03-21T00:00:00Z"),
+        makeVersion(id: "live", versionString: "2.0", state: "READY_FOR_SALE", createdDate: "2026-03-20T00:00:00Z"),
+    ]
+
+    let selectedVersionId = manager.syncSelectedVersion()
+
+    #expect(selectedVersionId == "rejected")
+    #expect(manager.selectedVersion?.id == "rejected")
+    #expect(manager.currentUpdateVersion?.id == "rejected")
+    #expect(manager.editableVersion?.id == "rejected")
+    #expect(!manager.canCreateUpdate)
+    #expect(manager.newVersionCreationBlocker?.id == "rejected")
+}
+
+@MainActor
 @Test func newVersionCreationBlockerUsesExistingInFlightVersion() {
     let manager = ASCManager()
     manager.appStoreVersions = [

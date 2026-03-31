@@ -71,9 +71,7 @@ struct ASCDashboardSummary: Sendable, Equatable {
 }
 
 enum ASCReleaseStatus {
-    static let liveStates: Set<String> = [
-        "READY_FOR_SALE",
-    ]
+    static let liveStates: Set<String> = [ "READY_FOR_SALE" ]
 
     static let removedStates: Set<String> = [
         "REMOVED_FROM_SALE",
@@ -102,9 +100,7 @@ enum ASCReleaseStatus {
         "PREPARE_FOR_SUBMISSION",
     ]).union(rejectedStates)
 
-    static let lockedStates: Set<String> = liveStates
-        .union(removedStates)
-        .union(pendingReviewStates)
+    static let lockedStates: Set<String> = liveStates.union(removedStates).union(pendingReviewStates)
 
     static func submissionHistoryEventType(forVersionState state: String?) -> ASCSubmissionHistoryEventType? {
         switch normalize(state) {
@@ -180,6 +176,31 @@ enum ASCReleaseStatus {
         }
     }
 
+    static func currentLiveVersion(for versions: [ASCAppStoreVersion]) -> ASCAppStoreVersion? {
+        let sortedVersions = sortedVersionsByRecency(versions)
+        return sortedVersions.first { liveStates.contains(normalize($0.attributes.appStoreState)) }
+    }
+
+    static func currentUpdateVersion(for versions: [ASCAppStoreVersion]) -> ASCAppStoreVersion? {
+        currentVersionWindow(for: versions).first { version in
+            isCurrentUpdateCandidate(version.attributes.appStoreState)
+        }
+    }
+
+    static func currentEditableVersion(for versions: [ASCAppStoreVersion]) -> ASCAppStoreVersion? {
+        currentVersionWindow(for: versions).first { version in
+            isEditable(version.attributes.appStoreState)
+        }
+    }
+
+    static func defaultSelectedVersion(for versions: [ASCAppStoreVersion]) -> ASCAppStoreVersion? {
+        let sortedVersions = sortedVersionsByRecency(versions)
+        return currentUpdateVersion(for: sortedVersions)
+            ?? currentEditableVersion(for: sortedVersions)
+            ?? currentLiveVersion(for: sortedVersions)
+            ?? sortedVersions.first
+    }
+
     /// App Wall shows one compact version summary per app, so it should use the
     /// same "current" version that the dashboard summary logic would surface
     /// instead of blindly taking the newest row.
@@ -217,6 +238,21 @@ enum ASCReleaseStatus {
     static func appWallCurrentState(for versions: [ASCAppStoreVersion]) -> String? {
         normalize(appWallCurrentVersion(for: versions)?.attributes.appStoreState)
             .nilIfEmpty
+    }
+
+    private static func currentVersionWindow(for versions: [ASCAppStoreVersion]) -> ArraySlice<ASCAppStoreVersion> {
+        let sortedVersions = sortedVersionsByRecency(versions)
+        guard let liveIndex = sortedVersions.firstIndex(where: {
+            liveStates.contains(normalize($0.attributes.appStoreState))
+        }) else {
+            return sortedVersions[...]
+        }
+
+        if liveIndex == 0 {
+            return []
+        }
+
+        return sortedVersions[..<liveIndex]
     }
 
     private static func compareDates(_ lhs: String?, _ rhs: String?) -> Int {

@@ -15,15 +15,15 @@ extension ASCManager {
     // MARK: - Version Selection
 
     var liveVersion: ASCAppStoreVersion? {
-        appStoreVersions.first { ASCReleaseStatus.isLive($0.attributes.appStoreState) }
+        ASCReleaseStatus.currentLiveVersion(for: appStoreVersions)
     }
 
     var currentUpdateVersion: ASCAppStoreVersion? {
-        appStoreVersions.first { ASCReleaseStatus.isCurrentUpdateCandidate($0.attributes.appStoreState) }
+        ASCReleaseStatus.currentUpdateVersion(for: appStoreVersions)
     }
 
     var editableVersion: ASCAppStoreVersion? {
-        appStoreVersions.first { ASCReleaseStatus.isEditable($0.attributes.appStoreState) }
+        ASCReleaseStatus.currentEditableVersion(for: appStoreVersions)
     }
 
     var selectedVersion: ASCAppStoreVersion? {
@@ -31,7 +31,7 @@ extension ASCManager {
            let match = appStoreVersions.first(where: { $0.id == selectedVersionId }) {
             return match
         }
-        return editableVersion ?? currentUpdateVersion ?? liveVersion ?? appStoreVersions.first
+        return ASCReleaseStatus.defaultSelectedVersion(for: appStoreVersions)
     }
 
     var selectedVersionIsEditable: Bool {
@@ -105,10 +105,10 @@ extension ASCManager {
             return selectedVersionId
         }
 
-        let resolved = editableVersion?.id
-            ?? currentUpdateVersion?.id
+        let resolved = currentUpdateVersion?.id
+            ?? editableVersion?.id
             ?? liveVersion?.id
-            ?? appStoreVersions.first?.id
+            ?? ASCReleaseStatus.defaultSelectedVersion(for: appStoreVersions)?.id
         selectedVersionId = resolved
         return resolved
     }
