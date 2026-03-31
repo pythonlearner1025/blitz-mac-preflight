@@ -82,13 +82,6 @@ struct BlitzApp: App {
         }
         .defaultSize(width: 1200, height: 900)
         .windowToolbarStyle(.unified(showsTitle: false))
-
-        Window("Cat Playground", id: "cat-playground") {
-            SimulatorCatFullscreenWindowView(appState: appState)
-                .frame(minWidth: 900, minHeight: 620)
-        }
-        .defaultSize(width: 1440, height: 900)
-        .windowStyle(.hiddenTitleBar)
     }
 }
 

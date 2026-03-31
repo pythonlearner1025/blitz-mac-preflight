@@ -9,16 +9,32 @@ struct TouchOverlayView: View {
     let onTap: (Double, Double) -> Void
     /// (fromX, fromY, toX, toY, duration, delta)
     let onSwipe: (Double, Double, Double, Double, Double, Int) -> Void
+    let gestureVisualization: GestureVisualizationSocketService
+    let activeDeviceID: String?
 
     @State private var dragStart: CGPoint?
     @State private var dragStartTime: Date?
     @State private var clickMarkers: [ClickMarker] = []
     @State private var swipePath: [CGPoint] = []
+    @State private var remoteSwipeTrails: [RemoteSwipeTrail] = []
+    @State private var renderedGestureIDs: Set<String> = []
 
     struct ClickMarker: Identifiable {
         let id = UUID()
         let position: CGPoint
         var opacity: Double = 1.0
+    }
+
+    struct RemoteSwipeTrail: Identifiable {
+        let id = UUID()
+        let from: CGPoint
+        let to: CGPoint
+        var opacity: Double = 1.0
+    }
+
+    private var gestureEventIDs: [String] { gestureEvents.map(\.id) }
+    private var gestureEvents: [GestureVisualizationEvent] {
+        gestureVisualization.events(for: activeDeviceID)
     }
 
     var body: some View {
@@ -119,8 +135,108 @@ struct TouchOverlayView: View {
                             .shadow(color: Color(red: 1.0, green: 0.1, blue: 0.08).opacity(0.7), radius: 6)
                             .shadow(color: Color(red: 1.0, green: 0.2, blue: 0.1).opacity(0.35), radius: 14)
                     }
+
+                    ForEach(remoteSwipeTrails) { trail in
+                        Path { path in
+                            path.move(to: trail.from)
+                            path.addLine(to: trail.to)
+                        }
+                        .stroke(
+                            Color(red: 1.0, green: 0.2, blue: 0.15).opacity(0.7 * trail.opacity),
+                            style: StrokeStyle(lineWidth: 2.5, lineCap: .round)
+                        )
+                        .shadow(color: Color(red: 1.0, green: 0.1, blue: 0.08).opacity(0.6 * trail.opacity), radius: 8)
+                        .shadow(color: Color(red: 1.0, green: 0.2, blue: 0.1).opacity(0.3 * trail.opacity), radius: 16)
+                    }
+                }
+                .onAppear {
+                    renderNewGestureEvents(viewSize: geometry.size)
+                }
+                .onChange(of: gestureEventIDs) {
+                    renderNewGestureEvents(viewSize: geometry.size)
+                }
+                .onChange(of: activeDeviceID) {
+                    renderedGestureIDs.removeAll()
+                    remoteSwipeTrails.removeAll()
+                    renderNewGestureEvents(viewSize: geometry.size)
                 }
         }
+    }
+
+    private func renderNewGestureEvents(viewSize: CGSize) {
+        renderedGestureIDs.formIntersection(Set(gestureEventIDs))
+
+        for event in gestureEvents where !renderedGestureIDs.contains(event.id) {
+            renderedGestureIDs.insert(event.id)
+
+            switch event.kind {
+            case .tap:
+                guard let x = event.x, let y = event.y else { continue }
+                renderTap(at: protocolToView(x: x, y: y, event: event, viewSize: viewSize))
+            case .swipe:
+                guard let x = event.x, let y = event.y,
+                      let x2 = event.x2, let y2 = event.y2 else { continue }
+                renderSwipe(
+                    from: protocolToView(x: x, y: y, event: event, viewSize: viewSize),
+                    to: protocolToView(x: x2, y: y2, event: event, viewSize: viewSize)
+                )
+            default:
+                continue
+            }
+        }
+    }
+
+    private func renderTap(at position: CGPoint) {
+        let marker = ClickMarker(position: position)
+        clickMarkers.append(marker)
+        withAnimation(.easeOut(duration: 0.6)) {
+            if let index = clickMarkers.firstIndex(where: { $0.id == marker.id }) {
+                clickMarkers[index].opacity = 0
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+            clickMarkers.removeAll { $0.id == marker.id }
+        }
+    }
+
+    private func renderSwipe(from: CGPoint, to: CGPoint) {
+        let trail = RemoteSwipeTrail(from: from, to: to)
+        remoteSwipeTrails.append(trail)
+        let trailID = trail.id
+        withAnimation(.easeOut(duration: 0.8)) {
+            if let index = remoteSwipeTrails.firstIndex(where: { $0.id == trailID }) {
+                remoteSwipeTrails[index].opacity = 0
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+            remoteSwipeTrails.removeAll { $0.id == trailID }
+        }
+    }
+
+    private func protocolToView(x: Double, y: Double, event: GestureVisualizationEvent, viewSize: CGSize) -> CGPoint {
+        let normalizedX = x / event.referenceWidth
+        let normalizedY = y / event.referenceHeight
+        let simulatorX = normalizedX * deviceConfig.widthPoints
+        let simulatorY = normalizedY * deviceConfig.heightPoints
+        let mapped = SimulatorConfigDatabase.simulatorToViewCoords(
+            simX: simulatorX,
+            simY: simulatorY,
+            viewWidth: viewSize.width,
+            viewHeight: viewSize.height,
+            config: deviceConfig,
+            frameWidth: frameWidth,
+            frameHeight: frameHeight
+        )
+        return CGPoint(
+            x: mapped.x.clamped(to: 0...viewSize.width),
+            y: mapped.y.clamped(to: 0...viewSize.height)
+        )
+    }
+}
+
+private extension Comparable {
+    func clamped(to range: ClosedRange<Self>) -> Self {
+        min(max(self, range.lowerBound), range.upperBound)
     }
 }
 

@@ -5,7 +5,6 @@ import SwiftTerm
 /// Main Build tab view — simulator frame display + touch interaction
 struct SimulatorView: View {
     @Bindable var appState: AppState
-    @Environment(\.openWindow) private var openWindow
 
     private var stream: SimulatorStreamManager { appState.simulatorStream }
     @State private var deviceInteraction = DeviceInteractionService()
@@ -54,20 +53,18 @@ struct SimulatorView: View {
     var body: some View {
         VStack(spacing: 0) {
             if let renderer = stream.renderer, stream.isCapturing {
-                SimulatorCatPlaygroundView(
-                    scene: appState.simulatorCats,
-                    phoneAspectRatio: cropAspectRatio,
-                    mode: .simulatorStage
-                ) {
-                    ZStack {
-                        MetalFrameView(
-                            renderer: renderer,
-                            captureService: stream.captureService,
-                            cursor: nil,
-                            cropRect: cropRect
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 32))
+                ZStack {
+                    Color.black
 
+                    MetalFrameView(
+                        renderer: renderer,
+                        captureService: stream.captureService,
+                        cursor: nil,
+                        cropRect: cropRect
+                    )
+                    .aspectRatio(cropAspectRatio, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 32))
+                    .overlay(
                         TouchOverlayView(
                             deviceConfig: deviceConfig,
                             frameWidth: Int(frameSize.width),
@@ -76,27 +73,16 @@ struct SimulatorView: View {
                                 Task { try? await handleTap(x: x, y: y) }
                             },
                             onSwipe: { fx, fy, tx, ty, duration, delta in
-                                Task {
-                                    try? await handleSwipe(
-                                        fromX: fx,
-                                        fromY: fy,
-                                        toX: tx,
-                                        toY: ty,
-                                        duration: duration,
-                                        delta: delta
-                                    )
-                                }
-                            }
+                                Task { try? await handleSwipe(fromX: fx, fromY: fy, toX: tx, toY: ty, duration: duration, delta: delta) }
+                            },
+                            gestureVisualization: appState.gestureVisualization,
+                            activeDeviceID: appState.simulatorManager.bootedDeviceId
                         )
                         .clipShape(RoundedRectangle(cornerRadius: 32))
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 32))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 32)
-                            .stroke(.white.opacity(0.08), lineWidth: 1)
                     )
-                    .shadow(color: .black.opacity(0.28), radius: 30, y: 12)
+                    .padding(16)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let errorMessage = stream.errorMessage {
                 VStack(spacing: 12) {
                     Image(systemName: "exclamationmark.triangle")
@@ -186,24 +172,12 @@ struct SimulatorView: View {
                     Task {
                         guard let udid = appState.simulatorManager.bootedDeviceId else { return }
                         _ = try? await deviceInteraction.execute(.button(.home), udid: udid)
-                        appState.simulatorCats.recordButtonPress()
                     }
                 }) {
                     Image(systemName: "house")
                         .padding(.horizontal, 4)
                 }
                 .help("Home button")
-            }
-
-            ToolbarItem(placement: .primaryAction) {
-                Button(action: {
-                    appState.simulatorCats.requestFullscreenOnNextOpen()
-                    openWindow(id: "cat-playground")
-                }) {
-                    Image(systemName: "sparkles.rectangle.stack")
-                        .padding(.horizontal, 4)
-                }
-                .help("Open cat-only fullscreen playground")
             }
 
             ToolbarItem(placement: .primaryAction) {
@@ -228,26 +202,14 @@ struct SimulatorView: View {
 
     private func handleTap(x: Double, y: Double) async throws {
         guard let udid = appState.simulatorManager.bootedDeviceId else { return }
-        appState.simulatorCats.recordTap(at: normalizedCatPoint(x: x, y: y))
         _ = try await deviceInteraction.execute(.tap(x: x, y: y), udid: udid)
     }
 
     private func handleSwipe(fromX: Double, fromY: Double, toX: Double, toY: Double, duration: Double, delta: Int) async throws {
         guard let udid = appState.simulatorManager.bootedDeviceId else { return }
-        appState.simulatorCats.recordSwipe(
-            from: normalizedCatPoint(x: fromX, y: fromY),
-            to: normalizedCatPoint(x: toX, y: toY)
-        )
         _ = try await deviceInteraction.execute(
             .swipe(fromX: fromX, fromY: fromY, toX: toX, toY: toY, duration: duration, delta: Double(delta)),
             udid: udid
-        )
-    }
-
-    private func normalizedCatPoint(x: Double, y: Double) -> CGPoint {
-        CGPoint(
-            x: CGFloat((x / deviceConfig.widthPoints).clamped(to: 0.08...0.92)),
-            y: CGFloat((y / deviceConfig.heightPoints).clamped(to: 0.08...0.92))
         )
     }
 
@@ -294,17 +256,11 @@ struct SimulatorView: View {
 
             let interaction = deviceInteraction
             if let hidCode = Self.hidKeycodes[event.keyCode] {
-                Task {
-                    _ = try? await interaction.execute(.key(.keycode(hidCode)), udid: udid)
-                    appState.simulatorCats.recordButtonPress()
-                }
+                Task { _ = try? await interaction.execute(.key(.keycode(hidCode)), udid: udid) }
                 return nil // consumed
             } else if let chars = event.characters, !chars.isEmpty,
                       chars.unicodeScalars.allSatisfy({ !$0.properties.isNoncharacterCodePoint && $0.value >= 0x20 }) {
-                Task {
-                    _ = try? await interaction.execute(.inputText(chars), udid: udid)
-                    appState.simulatorCats.recordButtonPress()
-                }
+                Task { _ = try? await interaction.execute(.inputText(chars), udid: udid) }
                 return nil // consumed
             }
 
@@ -335,11 +291,5 @@ struct SimulatorView: View {
             NSEvent.removeMonitor(monitor)
             keyMonitor = nil
         }
-    }
-}
-
-private extension Double {
-    func clamped(to range: ClosedRange<Double>) -> Double {
-        min(max(self, range.lowerBound), range.upperBound)
     }
 }
