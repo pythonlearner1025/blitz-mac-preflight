@@ -12,7 +12,7 @@ struct ProjectMetadataHydrator {
         var didChange = false
 
         if isBlank(hydrated.bundleIdentifier),
-           let bundleIdentifier = discoverBundleIdentifier(projectDirectory: projectDirectory) {
+           let bundleIdentifier = autoSelectedBundleIdentifier(projectDirectory: projectDirectory) {
             hydrated.bundleIdentifier = bundleIdentifier
             didChange = true
         }
@@ -20,17 +20,37 @@ struct ProjectMetadataHydrator {
         return (hydrated, didChange)
     }
 
-    func discoverBundleIdentifier(projectDirectory: URL) -> String? {
-        let root = projectDirectory.resolvingSymlinksInPath()
-
-        if let fromXcodeProject = discoverBundleIdentifierInXcodeProjects(root: root) {
-            return fromXcodeProject
-        }
-
-        return discoverBundleIdentifierInInfoPlists(root: root)
+    func autoSelectedBundleIdentifier(projectDirectory: URL) -> String? {
+        let candidates = discoverBundleIdentifiers(projectDirectory: projectDirectory)
+        guard candidates.count == 1 else { return nil }
+        return candidates[0]
     }
 
-    private func discoverBundleIdentifierInXcodeProjects(root: URL) -> String? {
+    func discoverBundleIdentifier(projectDirectory: URL) -> String? {
+        autoSelectedBundleIdentifier(projectDirectory: projectDirectory)
+    }
+
+    func discoverBundleIdentifiers(projectDirectory: URL) -> [String] {
+        let root = projectDirectory.resolvingSymlinksInPath()
+        var candidates: [String] = []
+
+        candidates.append(contentsOf: discoverBundleIdentifiersInXcodeProjects(root: root))
+        candidates.append(contentsOf: discoverBundleIdentifiersInInfoPlists(root: root))
+
+        var seen: Set<String> = []
+        var uniqueCandidates: [String] = []
+        for candidate in candidates {
+            if seen.insert(candidate).inserted {
+                uniqueCandidates.append(candidate)
+            }
+        }
+
+        return uniqueCandidates
+    }
+
+    private func discoverBundleIdentifiersInXcodeProjects(root: URL) -> [String] {
+        var bundleIdentifiers: [String] = []
+
         for xcodeprojURL in findFiles(
             named: nil,
             withExtension: "xcodeproj",
@@ -51,14 +71,16 @@ struct ProjectMetadataHydrator {
                       let bundleIdentifier = normalizeBundleIdentifier(String(content[candidateRange])) else {
                     continue
                 }
-                return bundleIdentifier
+                bundleIdentifiers.append(bundleIdentifier)
             }
         }
 
-        return nil
+        return bundleIdentifiers
     }
 
-    private func discoverBundleIdentifierInInfoPlists(root: URL) -> String? {
+    private func discoverBundleIdentifiersInInfoPlists(root: URL) -> [String] {
+        var bundleIdentifiers: [String] = []
+
         for plistURL in findFiles(named: "Info.plist", withExtension: nil, under: root) {
             guard let data = fileManager.contents(atPath: plistURL.path),
                   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
@@ -66,10 +88,10 @@ struct ProjectMetadataHydrator {
                   let bundleIdentifier = normalizeBundleIdentifier(rawBundleIdentifier) else {
                 continue
             }
-            return bundleIdentifier
+            bundleIdentifiers.append(bundleIdentifier)
         }
 
-        return nil
+        return bundleIdentifiers
     }
 
     private func findFiles(named expectedName: String?, withExtension expectedExtension: String?, under root: URL) -> [URL] {

@@ -238,6 +238,14 @@ struct AppDetailsView: View {
                         Divider().padding(.leading, 150)
                         InfoRow(label: "Bundle ID (local)", value: bid)
                     }
+                    ProjectBundleIDSelectorView(
+                        appState: appState,
+                        asc: asc,
+                        tab: .appDetails,
+                        platform: project.platform,
+                        subtitle: "Change which local bundle ID this project uses when loading App Store Connect data.",
+                        standalone: false
+                    )
                 }
 
                 sectionHeader("Build Signing")

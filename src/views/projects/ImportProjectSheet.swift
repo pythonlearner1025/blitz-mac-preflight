@@ -7,6 +7,8 @@ struct ImportProjectSheet: View {
     @State private var projectPath = ""
     @State private var platform: ProjectPlatform = .iOS
     @State private var projectType: ProjectType = .reactNative
+    @State private var discoveredBundleIds: [String] = []
+    @State private var selectedBundleId = ""
     @State private var isImporting = false
     @State private var errorMessage: String?
 
@@ -25,10 +27,7 @@ struct ImportProjectSheet: View {
                         panel.allowsMultipleSelection = false
                         if panel.runModal() == .OK, let url = panel.url {
                             projectPath = url.path
-                            if let detected = detectProject(at: url) {
-                                platform = detected.platform
-                                projectType = detected.type
-                            }
+                            refreshDetectedProjectState(for: url)
                         }
                     }
                 }
@@ -57,6 +56,53 @@ struct ImportProjectSheet: View {
                 }
             }
             .formStyle(.grouped)
+            .onChange(of: projectPath) { _, newValue in
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else {
+                    discoveredBundleIds = []
+                    selectedBundleId = ""
+                    return
+                }
+
+                let url = URL(fileURLWithPath: trimmed)
+                refreshDetectedProjectState(for: url)
+            }
+
+            if discoveredBundleIds.count > 1 {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Bundle ID")
+                        .font(.callout.weight(.medium))
+
+                    Picker("Bundle ID", selection: $selectedBundleId) {
+                        Text("Select a bundle ID").tag("")
+                        ForEach(discoveredBundleIds, id: \.self) { bundleId in
+                            Text(bundleId).tag(bundleId)
+                        }
+                    }
+
+                    Text("Multiple bundle IDs were discovered in this project. Choose the one Blitz should use for App Store Connect.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if let bundleId = discoveredBundleIds.first {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Bundle ID")
+                        .font(.callout.weight(.medium))
+                    Text(bundleId)
+                        .font(.system(.callout, design: .monospaced))
+                    Text("Blitz will use the discovered bundle ID above. You can switch it later from the ASC overview.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if !projectPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Bundle ID")
+                        .font(.callout.weight(.medium))
+                    Text("No bundle IDs were discovered. You can import now and register or select one later from the ASC overview.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
 
             if let errorMessage {
                 Text(errorMessage)
@@ -74,7 +120,7 @@ struct ImportProjectSheet: View {
                     Task { await importProject() }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(projectPath.isEmpty || isImporting)
+                .disabled(projectPath.isEmpty || isImporting || requiresBundleIdSelection)
             }
         }
         .padding()
@@ -130,6 +176,26 @@ struct ImportProjectSheet: View {
         return .iOS
     }
 
+    private var requiresBundleIdSelection: Bool {
+        discoveredBundleIds.count > 1 && selectedBundleId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func refreshDetectedProjectState(for url: URL) {
+        if let detected = detectProject(at: url) {
+            platform = detected.platform
+            projectType = detected.type
+        }
+
+        let candidates = ProjectMetadataHydrator().discoverBundleIdentifiers(projectDirectory: url)
+        discoveredBundleIds = candidates
+
+        if candidates.count == 1 {
+            selectedBundleId = candidates[0]
+        } else if !candidates.contains(selectedBundleId) {
+            selectedBundleId = ""
+        }
+    }
+
     private func importProject() async {
         isImporting = true
         errorMessage = nil
@@ -151,11 +217,17 @@ struct ImportProjectSheet: View {
             }
         }
 
+        if requiresBundleIdSelection {
+            errorMessage = "Select which bundle ID this project should use before importing."
+            return
+        }
+
         let storage = ProjectStorage()
         let metadata = BlitzProjectMetadata(
             name: url.lastPathComponent,
             type: projectType,
             platform: platform,
+            bundleIdentifier: selectedBundleId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : selectedBundleId,
             createdAt: Date(),
             lastOpenedAt: Date()
         )

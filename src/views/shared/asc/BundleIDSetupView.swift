@@ -109,24 +109,30 @@ struct BundleIDSetupView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                switch phase {
-                case .form:
-                    formContent
-                case .creating:
-                    creatingContent
-                case .manual:
-                    manualContent
-                case .confirming:
-                    confirmingContent
+        Group {
+            if appState.activeProject == nil {
+                ASCNoProjectSelectedView()
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        switch phase {
+                        case .form:
+                            formContent
+                        case .creating:
+                            creatingContent
+                        case .manual:
+                            manualContent
+                        case .confirming:
+                            confirmingContent
+                        }
+                    }
+                    .padding(32)
+                    .frame(maxWidth: 540, alignment: .leading)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onAppear(perform: prefill)
             }
-            .padding(32)
-            .frame(maxWidth: 540, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear(perform: prefill)
     }
 
     // MARK: - Phase 1: Form

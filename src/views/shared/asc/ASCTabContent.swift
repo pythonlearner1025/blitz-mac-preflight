@@ -16,8 +16,14 @@ struct ASCTabContent<Content: View>: View {
         asc.credentials != nil && asc.app != nil
     }
 
+    private var hasSelectedProject: Bool {
+        appState.activeProject != nil
+    }
+
     var body: some View {
-        if isLoading && !shouldRenderContentWhileLoading {
+        if !hasSelectedProject {
+            ASCNoProjectSelectedView()
+        } else if isLoading && !shouldRenderContentWhileLoading {
             VStack(spacing: 12) {
                 ProgressView()
                 Text("Loading\u{2026}")
@@ -26,8 +32,14 @@ struct ASCTabContent<Content: View>: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if asc.app == nil && asc.credentials != nil && !isLoading {
-            // App not found — show bundle ID setup instead of flashing content
-            BundleIDSetupView(appState: appState, asc: asc, tab: tab, platform: platform)
+            ProjectBundleIDSelectorView(
+                appState: appState,
+                asc: asc,
+                tab: tab,
+                platform: platform,
+                title: "Select Project Bundle ID",
+                standalone: true
+            )
         } else if let error = asc.tabError[tab], !asc.hasLoadedTabData(tab) {
             VStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle")
@@ -80,6 +92,18 @@ struct ASCTabContent<Content: View>: View {
                     }
                 }
         }
+    }
+}
+
+struct ASCNoProjectSelectedView: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            Text("Select a project first.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(32)
     }
 }
 
