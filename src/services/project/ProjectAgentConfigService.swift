@@ -9,6 +9,41 @@ struct ProjectAgentConfigService {
         case agents = ".agents"
     }
 
+    private func blitzIphoneCommand(nodeRuntimeBin: String) -> (command: String, args: [String], env: [String: String]) {
+        let pathEnv = "\(nodeRuntimeBin):/usr/bin:/bin:/usr/sbin:/sbin"
+        if let localCLI = Self.localBlitzIphoneCLIPath() {
+            let localNode = Self.localNodePath() ?? "/opt/homebrew/bin/node"
+            return (
+                command: localNode,
+                args: [localCLI],
+                env: ["PATH": "\(pathEnv):/opt/homebrew/bin:/usr/local/bin"]
+            )
+        }
+
+        return (
+            command: nodeRuntimeBin + "/npx",
+            args: ["-y", "@blitzdev/iphone-mcp"],
+            env: ["PATH": pathEnv]
+        )
+    }
+
+    private static func localBlitzIphoneCLIPath() -> String? {
+        let candidate = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("superapp/blitz-ios-mcp/dist/cli.js")
+        guard FileManager.default.isExecutableFile(atPath: candidate.path) else {
+            return nil
+        }
+        return candidate.path
+    }
+
+    private static func localNodePath() -> String? {
+        let candidates = [
+            "/opt/homebrew/bin/node",
+            "/usr/local/bin/node",
+        ]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
     func ensureGlobalMCPConfigs(whitelistBlitzMCP: Bool = true, allowASCCLICalls: Bool = false) {
         let fm = FileManager.default
         let mcpsDir = BlitzPaths.mcps
@@ -122,12 +157,11 @@ struct ProjectAgentConfigService {
 
         let blitzMacosEntry: [String: Any] = ["command": helperPath]
         let nodeRuntimeBin = BlitzPaths.nodeDir.path
+        let blitzIphoneCommand = blitzIphoneCommand(nodeRuntimeBin: nodeRuntimeBin)
         let blitzIphoneEntry: [String: Any] = [
-            "command": nodeRuntimeBin + "/npx",
-            "args": ["-y", "@blitzdev/iphone-mcp"],
-            "env": [
-                "PATH": "\(nodeRuntimeBin):/usr/bin:/bin:/usr/sbin:/sbin"
-            ]
+            "command": blitzIphoneCommand.command,
+            "args": blitzIphoneCommand.args,
+            "env": blitzIphoneCommand.env
         ]
 
         var root: [String: Any]
@@ -165,7 +199,10 @@ struct ProjectAgentConfigService {
         let codexIphoneEnabledToolsToml = codexIphoneEnabledTools
             .map { "\"\(Self.escapeTOMLString($0))\"" }
             .joined(separator: ", ")
-        let codexIphonePathEnv = "\(nodeRuntimeBin):/usr/bin:/bin:/usr/sbin:/sbin"
+        let codexIphonePathEnv = blitzIphoneCommand.env["PATH"] ?? "\(nodeRuntimeBin):/usr/bin:/bin:/usr/sbin:/sbin"
+        let codexIphoneArgsToml = blitzIphoneCommand.args
+            .map { "\"\(Self.escapeTOMLString($0))\"" }
+            .joined(separator: ", ")
         let codexProjectDocFallbackLine = includeProjectDocFallback
             ? "project_doc_fallback_filenames = [\".claude/rules/blitz.md\", \".claude/rules/teenybase.md\"]"
             : ""
@@ -180,8 +217,8 @@ struct ProjectAgentConfigService {
         enabled_tools = [\(codexMacEnabledToolsToml)]
 
         [mcp_servers."blitz-iphone"]
-        command = "\(Self.escapeTOMLString(nodeRuntimeBin + "/npx"))"
-        args = ["-y", "@blitzdev/iphone-mcp"]
+        command = "\(Self.escapeTOMLString(blitzIphoneCommand.command))"
+        args = [\(codexIphoneArgsToml)]
         cwd = "\(Self.escapeTOMLString(directory.path))"
         enabled_tools = [\(codexIphoneEnabledToolsToml)]
 
@@ -232,10 +269,10 @@ struct ProjectAgentConfigService {
         ]
         opencodeMcp["blitz-iphone"] = [
             "type": "local",
-            "command": [nodeRuntimeBin + "/npx", "-y", "@blitzdev/iphone-mcp"],
+            "command": [blitzIphoneCommand.command] + blitzIphoneCommand.args,
             "enabled": true,
             "environment": [
-                "PATH": "\(nodeRuntimeBin):/usr/bin:/bin:/usr/sbin:/sbin",
+                "PATH": codexIphonePathEnv,
             ],
         ]
         opencodeMcp.removeValue(forKey: "blitz-ios")

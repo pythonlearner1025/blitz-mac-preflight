@@ -53,6 +53,12 @@ enum BlitzPaths {
     /// Local Unix socket used by the app-owned MCP executor.
     static var mcpSocket: URL { BlitzMCPTransportPaths.socket }
 
+    /// Local Unix datagram socket for live gesture visualization events.
+    static var gestureEventsSocket: URL { root.appendingPathComponent("gesture-events.sock") }
+
+    /// Optional append-only mirror for gesture visualization events.
+    static var gestureEventsJSONL: URL { root.appendingPathComponent("gesture-events.jsonl") }
+
     /// Signing base directory: ~/.blitz/signing/
     static var signing: URL { root.appendingPathComponent("signing") }
 

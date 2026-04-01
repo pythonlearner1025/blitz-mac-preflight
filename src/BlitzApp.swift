@@ -27,6 +27,7 @@ final class BlitzAppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         _ = AppRelaunchService.shared.schedulePendingScreenRecordingRelaunchIfNeeded()
         MCPBootstrap.shared.shutdown()
+        appState?.gestureVisualization.tearDown()
         // Don't block termination with synchronous simctl shutdown —
         // this prevents macOS TCC "Quit & Reopen" from relaunching the app.
         // Fire-and-forget: let simctl handle cleanup in the background.
