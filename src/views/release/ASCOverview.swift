@@ -5,6 +5,7 @@ struct ASCOverview: View {
 
     private var asc: ASCManager { appState.ascManager }
     @State private var showPreview = false
+    @State private var showBundleIDSelector = false
 
     private var selectedVersionBinding: Binding<String> {
         Binding(
@@ -71,10 +72,33 @@ struct ASCOverview: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(app.name)
                                 .font(.headline)
-                            Text(app.bundleId)
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                                .fontDesign(.monospaced)
+                            HStack(spacing: 4) {
+                                Text(app.bundleId)
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                                    .fontDesign(.monospaced)
+                                if appState.activeProject != nil {
+                                    Button {
+                                        showBundleIDSelector = true
+                                    } label: {
+                                        Image(systemName: "gearshape")
+                                            .font(.callout)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .popover(isPresented: $showBundleIDSelector, arrowEdge: .bottom) {
+                                        ProjectBundleIDSelectorView(
+                                            appState: appState,
+                                            asc: asc,
+                                            tab: .app,
+                                            platform: appState.activeProject?.platform ?? .iOS,
+                                            subtitle: "Switch which bundle ID this project uses for App Store Connect. This is useful for multi-target projects that ship different app, extension, or test bundle identifiers.",
+                                            standalone: false
+                                        )
+                                        .frame(width: 480)
+                                    }
+                                }
+                            }
                         }
                     }
                 }

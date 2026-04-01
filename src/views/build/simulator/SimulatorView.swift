@@ -74,9 +74,7 @@ struct SimulatorView: View {
                             },
                             onSwipe: { fx, fy, tx, ty, duration, delta in
                                 Task { try? await handleSwipe(fromX: fx, fromY: fy, toX: tx, toY: ty, duration: duration, delta: delta) }
-                            },
-                            gestureVisualization: appState.gestureVisualization,
-                            activeDeviceID: appState.simulatorManager.bootedDeviceId
+                            }
                         )
                         .clipShape(RoundedRectangle(cornerRadius: 32))
                     )
